@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Build output and IDE state
+# ---------------------------------------------------------------------------
+*.iml
+.gradle/
+.kotlin/
+/.idea/
+/build
+app/build/
+/captures
+.externalNativeBuild
+.cxx
+.DS_Store
+
+# Machine-specific: points at wherever your Android SDK happens to live.
+local.properties
+
+# ---------------------------------------------------------------------------
+# Release signing — NEVER commit these
+#
+# release.jks is the private key the app is signed with and keystore.properties
+# holds its password in plaintext. Publishing either one lets anyone ship an
+# update that installs over this app on someone's phone. They also cannot be
+# regenerated: lose them and you can never update an installed copy again, so
+# keep a backup somewhere that is not this repository.
+# ---------------------------------------------------------------------------
+keystore.properties
+release.jks
+*.jks
+*.keystore
+*.p12
+
+# ---------------------------------------------------------------------------
+# Artefacts that do not belong in source control
+#
+# A built APK is tens of megabytes and is reproducible from this source; the
+# tarballs are snapshots of the repository itself. Both bloat the history
+# permanently, because git keeps every version of every file for ever.
+# Attach APKs to a GitHub Release instead.
+# ---------------------------------------------------------------------------
+*.apk
+*.aab
+*.tar.gz
+*.zip
+_to_delete/
+
+# Note: app/schemas/ IS committed on purpose — Room compares against those
+# JSON files to verify migrations, so they belong in the repository.
