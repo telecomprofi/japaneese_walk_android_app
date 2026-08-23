@@ -8,6 +8,9 @@ your own music folder, Apple-Watch-style 270° heart-rate zone rings, and a week
 
 No account. No cloud. No analytics. Nothing leaves the phone.
 
+**[Download the latest APK](../../releases/latest)** — or build it yourself, see §2.
+Android 13 (SDK 33) or newer. You will need to allow install from an unknown source once.
+
 ---
 
 ## Screenshots
@@ -20,7 +23,7 @@ No account. No cloud. No analytics. Nothing leaves the phone.
 | Music | Settings |
 |---|---|
 | ![Music tab](docs/screenshots/music.png) | ![Settings tab](docs/screenshots/settings.png) |
-| Search the scanned catalogue, add tracks to the workout queue, see each one's measured tempo. | Profile, protocol, strap, voice coach and zone colours — explanatory text tucked behind (i). |
+| Search the scanned catalogue, add tracks to the workout queue, see each one's measured tempo. | Strap pairing and status, then your profile — age, resting and max heart rate, weight. Protocol, voice coach and zone colours follow below; explanatory text is tucked behind (i). |
 
 <sub>Capture or refresh these with `./tools/capture-screenshots.sh` while a device is attached.</sub>
 
@@ -56,7 +59,7 @@ walking MET value so the session total keeps advancing instead of stalling.
 # from the project root
 ./gradlew test                   # 60 unit tests, no device needed
 ./gradlew assembleDebug          # app/build/outputs/apk/debug/app-debug.apk    (~65 MB)
-./gradlew assembleRelease        # app/build/outputs/apk/release/app-release.apk (~8 MB)
+./gradlew assembleRelease        # app/build/outputs/apk/release/app-release.apk (~3.5 MB)
 ```
 
 ### The release build
