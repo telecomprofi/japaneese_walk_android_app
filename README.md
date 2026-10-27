@@ -8,7 +8,7 @@ your own music folder, Apple-Watch-style 270° heart-rate zone rings, and a week
 
 No account. No cloud. No analytics. Nothing leaves the phone.
 
-**[Download the latest APK](../../releases/latest)** — or build it yourself, see §2.
+** Build it yourself, see §2.
 Android 13 (SDK 33) or newer. You will need to allow install from an unknown source once.
 
 ---
@@ -61,13 +61,18 @@ walking MET value so the session total keeps advancing instead of stalling.
 
 ---
 
-## 2. Building
+## 2. Building & Installing via adb
 
 ```bash
 # from the project root
 ./gradlew test                   # 60 unit tests, no device needed
 ./gradlew assembleDebug          # app/build/outputs/apk/debug/app-debug.apk    (~65 MB)
 ./gradlew assembleRelease        # app/build/outputs/apk/release/app-release.apk (~3.5 MB)
+```
+or 
+
+```
+./gradlew test assembleRelease && adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 ### The release build
