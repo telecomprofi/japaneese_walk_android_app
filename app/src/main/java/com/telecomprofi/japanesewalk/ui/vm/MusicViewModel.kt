@@ -25,6 +25,7 @@ class MusicViewModel : ViewModel() {
 
     private val container = Graph.container
     private val catalogueDao = container.db.catalogueDao()
+    private val library = container.musicLibrary
 
     val music: StateFlow<MusicSettings> = container.prefs.settings
         .map { it.music }
@@ -54,6 +55,11 @@ class MusicViewModel : ViewModel() {
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
+
+    /** Recomputed with the playlist: cheap, and always right when it is read. */
+    val accessProblem: StateFlow<String?> = container.db.trackDao().all()
+        .map { library.accessProblem(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val _status = MutableStateFlow<String?>(null)
     val status: StateFlow<String?> = _status.asStateFlow()
@@ -134,6 +140,22 @@ class MusicViewModel : ViewModel() {
         }
     }
 
+    /** A tempo typed in by hand; it outranks measurement and survives a re-measure. */
+    fun setBpm(track: TrackEntity, bpm: Double) = viewModelScope.launch {
+        container.db.trackDao().setManualBpm(track.uri, bpm)
+    }
+
+    /** Hand the track back to the measurer. */
+    fun clearBpm(track: TrackEntity) = viewModelScope.launch {
+        container.db.trackDao().setAnalysis(
+            uri = track.uri,
+            bpm = 0.0,
+            conf = 0.0,
+            lufs = track.loudnessLufs,
+            at = 0L,
+        )
+    }
+
     fun remove(track: TrackEntity) {
         viewModelScope.launch { container.musicLibrary.removeFromWorkout(track.uri) }
     }
@@ -143,6 +165,33 @@ class MusicViewModel : ViewModel() {
     }
 
     fun analyse() = runAnalysisJob()
+
+    /** Take tempi from the files' own tags, which needs no decoding. */
+    fun readTags() {
+        job?.cancel()
+        job = viewModelScope.launch {
+            _busy.value = true
+            try {
+                val dropped = container.musicLibrary.dropUnplayable()
+                val upgraded = container.musicLibrary.adoptTags { _progress.value = it }
+                _status.value = buildString {
+                    append(
+                        if (upgraded > 0) {
+                            "$upgraded tracks took their tempo from the file's own tag"
+                        } else {
+                            "No usable BPM tags found in the queued files"
+                        }
+                    )
+                    if (dropped > 0) {
+                        append(" · $dropped in formats this phone cannot play were removed")
+                    }
+                }
+            } finally {
+                _busy.value = false
+                _progress.value = null
+            }
+        }
+    }
 
     fun reanalyseAll() {
         job?.cancel()

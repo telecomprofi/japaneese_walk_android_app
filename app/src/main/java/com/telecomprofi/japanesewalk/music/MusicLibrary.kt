@@ -8,6 +8,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.room.withTransaction
 import com.telecomprofi.japanesewalk.data.db.AppDatabase
 import com.telecomprofi.japanesewalk.data.db.CatalogueEntity
+import com.telecomprofi.japanesewalk.data.db.BpmSource
 import com.telecomprofi.japanesewalk.data.db.TrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -16,8 +17,16 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "MusicLibrary"
 
+
 /** How deep to walk the granted folder. ARTIST/ALBUM trees sit a few levels down. */
 private const val MAX_DEPTH = 5
+
+/**
+ * Written when a file cannot be decoded, so it reads as "measured" and is not
+ * retried on every visit to the Music tab. Well below anything real, so it is
+ * ignored when the playlist's levelling target is chosen.
+ */
+private const val FAILED_LOUDNESS = -99.0
 
 data class CatalogueReport(
     val filesFound: Int = 0,
@@ -53,6 +62,33 @@ class MusicLibrary(
 ) {
     private val trackDao = db.trackDao()
     private val catalogueDao = db.catalogueDao()
+
+    /**
+     * Whether the app can still open the queued tracks, in words.
+     *
+     * SAF grants are persisted, but they do not always survive: a reboot, an
+     * update, or the user clearing the app's data can take them away, and the
+     * only symptom is that music silently stops playing. Asking directly turns
+     * that into a sentence with an action in it.
+     */
+    fun accessProblem(tracks: List<TrackEntity>): String? {
+        if (tracks.isEmpty()) return null
+        val persisted = try {
+            context.contentResolver.persistedUriPermissions.map { it.uri.toString() }
+        } catch (e: Exception) {
+            return null
+        }
+        val reachable = tracks.count { track -> persisted.any { track.uri.startsWith(it) } }
+        return when {
+            persisted.isEmpty() || reachable == 0 ->
+                "Android has forgotten the permission on your music folder, so nothing " +
+                    "can be played. Pick the folder again below — your playlist is kept."
+            reachable < tracks.size ->
+                "${tracks.size - reachable} of ${tracks.size} queued tracks are out of reach. " +
+                    "Pick the folder again to restore them."
+            else -> null
+        }
+    }
 
     /**
      * Walk the granted folder and record what is there, tags and all.
@@ -223,19 +259,29 @@ class MusicLibrary(
      */
     suspend fun analysePending(onProgress: (AnalysisProgress) -> Unit = {}): Int =
         withContext(Dispatchers.Default) {
-            val pending = trackDao.unanalysed()
+            val pending = trackDao.pendingAnalysis()
             var done = 0
             for (track in pending) {
                 currentCoroutineContext().ensureActive()
                 onProgress(AnalysisProgress(done, pending.size, track.displayName))
                 val result = analyse(Uri.parse(track.uri))
                 // Stamp analyzedAt either way, so a file that cannot be decoded
-                // is not re-attempted on every scan.
-                if (result != null && result.bpm > 0) {
-                    trackDao.setBpm(track.uri, result.bpm, result.confidence, System.currentTimeMillis())
+                // is not re-attempted on every scan. A failed decode also has to
+                // leave a loudness that reads as measured, or pendingAnalysis()
+                // would hand it back forever.
+                if (result != null) {
+                    trackDao.setAnalysis(
+                        uri = track.uri,
+                        bpm = result.bpm,
+                        conf = result.confidence,
+                        lufs = result.lufs ?: FAILED_LOUDNESS,
+                        at = System.currentTimeMillis(),
+                        source = result.source,
+                    )
+                    if (result.bpm <= 0) Log.w(TAG, "tempo analysis failed for ${track.fileName}")
                 } else {
-                    trackDao.setBpm(track.uri, 0.0, 0.0, System.currentTimeMillis())
-                    Log.w(TAG, "tempo analysis failed for ${track.fileName}")
+                    trackDao.setAnalysis(track.uri, 0.0, 0.0, FAILED_LOUDNESS, System.currentTimeMillis())
+                    Log.w(TAG, "decode failed for ${track.fileName}")
                 }
                 done++
                 onProgress(AnalysisProgress(done, pending.size, track.displayName))
@@ -245,13 +291,97 @@ class MusicLibrary(
 
     suspend fun reanalyseAll(onProgress: (AnalysisProgress) -> Unit = {}): Int =
         withContext(Dispatchers.Default) {
-            trackDao.allOnce().forEach { trackDao.setBpm(it.uri, 0.0, 0.0, 0L) }
+            trackDao.clearAnalysis()
             analysePending(onProgress)
         }
 
-    private fun analyse(uri: Uri): TempoResult? {
-        val decoded = AudioDecoder.decodeMonoExcerpt(context, uri) ?: return null
-        return TempoEstimator.estimate(decoded.mono)
+    /**
+     * Remove tracks the player can never read from the queue.
+     *
+     * They were scanned in before the app knew better, and they fail one at a
+     * time, mid-walk, with a banner each. Dropping them in one go is quieter.
+     */
+    suspend fun dropUnplayable(): Int = withContext(Dispatchers.IO) {
+        val queued = trackDao.allOnce()
+        var dropped = 0
+        for (track in queued) {
+            if (!PlayableFormats.isPlayable(track.fileName)) {
+                trackDao.setMissing(track.uri, true)
+                dropped++
+            }
+        }
+        if (dropped > 0) Log.i(TAG, "dropped $dropped track(s) in formats the player cannot read")
+        dropped
+    }
+
+    /**
+     * Take the tempo from the file's own tag wherever measurement was used and a
+     * tag exists. Reading a few hundred kilobytes per track is fast enough to
+     * sweep a large library in a minute, and it needs no audio decoding.
+     */
+    suspend fun adoptTags(onProgress: (AnalysisProgress) -> Unit = {}): Int =
+        withContext(Dispatchers.IO) {
+            val measured = trackDao.allOnce().filter { it.bpmSource == BpmSource.MEASURED }
+            var upgraded = 0
+            measured.forEachIndexed { index, track ->
+                currentCoroutineContext().ensureActive()
+                if (index % 25 == 0) {
+                    onProgress(AnalysisProgress(index, measured.size, "Reading tags…"))
+                }
+                val tagged = readBpmTag(Uri.parse(track.uri)) ?: return@forEachIndexed
+                if (tagged != track.bpm) {
+                    trackDao.setAnalysis(
+                        uri = track.uri,
+                        bpm = tagged,
+                        conf = 1.0,
+                        lufs = track.loudnessLufs,
+                        at = if (track.analyzedAt > 0) track.analyzedAt else System.currentTimeMillis(),
+                        source = BpmSource.TAG,
+                    )
+                    upgraded++
+                }
+            }
+            upgraded
+        }
+
+    /** Tempo and loudness from a single decode; the decode is the expensive part. */
+    private data class Measurement(
+        val bpm: Double,
+        val confidence: Double,
+        val lufs: Double?,
+        val source: Int = BpmSource.MEASURED,
+    )
+
+    private fun analyse(uri: Uri): Measurement? {
+        // The file's own tag first. Measuring tempo from audio is hard and goes
+        // wrong in a particular way on dance music — two-thirds or half of the
+        // real figure — while a tag written by iTunes, Traktor or a Beatport
+        // download is simply correct. Loudness still needs the decode.
+        val tagged = readBpmTag(uri)
+        val decoded = AudioDecoder.decodeMonoExcerpt(context, uri)
+            ?: return tagged?.let { Measurement(it, 1.0, null, BpmSource.TAG) }
+        if (tagged != null) {
+            return Measurement(tagged, 1.0, decoded.lufs, BpmSource.TAG)
+        }
+        val tempo = TempoEstimator.estimate(decoded.mono)
+        return Measurement(tempo.bpm, tempo.confidence, decoded.lufs)
+    }
+
+    /** The first few hundred kilobytes are where a BPM tag lives, if anywhere. */
+    private fun readBpmTag(uri: Uri): Double? = try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val head = ByteArray(BpmTags.HEAD_BYTES)
+            var read = 0
+            while (read < head.size) {
+                val n = stream.read(head, read, head.size - read)
+                if (n <= 0) break
+                read += n
+            }
+            if (read <= 0) null else BpmTags.fromHeader(head.copyOf(read))
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "could not read tags from $uri", e)
+        null
     }
 
     private suspend fun index(
@@ -284,12 +414,18 @@ class MusicLibrary(
         }
     }
 
-    private fun isAudio(name: String): Boolean {
-        val lower = name.lowercase()
-        return lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac") ||
-            lower.endsWith(".flac") || lower.endsWith(".ogg") || lower.endsWith(".opus") ||
-            lower.endsWith(".wav") || lower.endsWith(".wma")
-    }
+    /**
+     * Formats the *player* can read, which is not the same as the formats the
+     * phone can decode.
+     *
+     * Windows Media is the one that catches people out. Some phones — Samsung's
+     * especially — ship a platform WMA decoder, so the analyser happily reads
+     * the tempo and loudness and the track looks perfectly healthy in the
+     * playlist. Media3 has no WMA extractor at all, so the moment it is asked
+     * to play, it refuses. A library synced from Windows Media Player can be
+     * half WMA, which is exactly how every other song came to be skipped.
+     */
+    private fun isAudio(name: String): Boolean = PlayableFormats.isPlayable(name)
 
     private fun displayName(uri: Uri): String? =
         try {

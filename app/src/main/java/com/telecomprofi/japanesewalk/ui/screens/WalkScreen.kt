@@ -15,9 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -25,7 +23,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -44,35 +41,59 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.telecomprofi.japanesewalk.core.Phase
 import com.telecomprofi.japanesewalk.core.TimeMath
+import com.telecomprofi.japanesewalk.core.TrainerControlMode
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import com.telecomprofi.japanesewalk.hrm.HrmState
 import com.telecomprofi.japanesewalk.ui.components.Dot
 import com.telecomprofi.japanesewalk.ui.components.HrRings
+import com.telecomprofi.japanesewalk.ui.components.MusicRow
+import com.telecomprofi.japanesewalk.ui.components.SetFlash
+import com.telecomprofi.japanesewalk.ui.components.SetLine
+import com.telecomprofi.japanesewalk.ui.components.SetProgress
 import com.telecomprofi.japanesewalk.ui.components.StatTile
-import com.telecomprofi.japanesewalk.ui.components.ZoneThermometer
 import com.telecomprofi.japanesewalk.ui.theme.JwColors
 import com.telecomprofi.japanesewalk.ui.theme.color
 import com.telecomprofi.japanesewalk.ui.vm.WalkViewModel
 import com.telecomprofi.japanesewalk.workout.EngineStatus
+import com.telecomprofi.japanesewalk.workout.SessionShape
 import com.telecomprofi.japanesewalk.workout.WorkoutHub
 import com.telecomprofi.japanesewalk.workout.WorkoutService
 
 /**
- * The zones screen. Deliberately a single fixed page with no scrolling: mid-walk
+ * The walk screen. Deliberately a single fixed page with no scrolling: mid-walk
  * you are looking at a phone at arm's length, possibly in the rain, and Finish
  * must never be one gesture away. Weekly and monthly figures live on Summary.
  *
- * @param onFinished called once the session ends, so the app can drop back to
- *        the Summary screen with fresh totals.
+ * @param onFinished called once the session ends *and has been saved*, so the
+ *        app can drop back to the Summary screen with fresh totals. Note that
+ *        the cool-down counts as still running — the walk is not over until the
+ *        heart rate has come down.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
     val context = LocalContext.current
     val state by vm.workout.collectAsState()
-    val bands by vm.bands.collectAsState()
+    val settings by vm.settings.collectAsState()
+    val idleBands by vm.bands.collectAsState()
     val plannedMinutes by vm.plannedMinutes.collectAsState()
     val info by vm.info.collectAsState()
     val musicMuted by vm.musicMuted.collectAsState()
+    // While a session is running, everything geometric comes from the engine's
+    // snapshot: changing Sets or the intensity model mid-walk must not redraw
+    // the gauge or the set bar against a plan that is not being run.
+    val bands = if (state.isActive && state.zoneBands.isNotEmpty()) state.zoneBands else idleBands
+    val shape = if (state.isActive) {
+        state.shape
+    } else {
+        SessionShape(
+            sets = settings.protocol.sets,
+            slowSec = settings.protocol.slowSec,
+            fastSec = settings.protocol.fastSec,
+            warmupSec = settings.protocol.warmupSec,
+            startWithSlow = settings.protocol.startWithSlow,
+        )
+    }
 
     // Hand control back to Summary as soon as the walk is over — but only on a
     // real transition. Landing on this tab while a stale FINISHED state is still
@@ -80,7 +101,7 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
     var sawActiveSession by remember { mutableStateOf(false) }
     LaunchedEffect(state.status) {
         when (state.status) {
-            EngineStatus.RUNNING, EngineStatus.PAUSED -> sawActiveSession = true
+            EngineStatus.RUNNING, EngineStatus.PAUSED, EngineStatus.COOLING -> sawActiveSession = true
             EngineStatus.FINISHED -> if (sawActiveSession) {
                 sawActiveSession = false
                 onFinished()
@@ -106,13 +127,14 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
         if (needed.isEmpty()) WorkoutService.start(context) else permissions.launch(needed.toTypedArray())
     }
 
-    val phaseColor = when (state.phase) {
-        Phase.FAST -> JwColors.Fast
-        Phase.SLOW -> JwColors.Slow
-        Phase.WARMUP, Phase.COOLDOWN -> JwColors.Accent
-        null -> JwColors.Muted
+    val phaseColor = when {
+        state.isCooling -> JwColors.Accent
+        state.phase == Phase.FAST -> JwColors.Fast
+        state.phase == Phase.SLOW -> JwColors.Slow
+        state.phase == null -> JwColors.Muted
+        else -> JwColors.Accent
     }
-    val active = state.status == EngineStatus.RUNNING || state.status == EngineStatus.PAUSED
+    val active = state.isActive
 
     Column(
         Modifier
@@ -133,11 +155,9 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
             )
         }
 
-        // The rings take whatever vertical space is left over once the numbers
-        // and controls have had theirs — so they shrink, never the buttons.
-        // The rings are the only flexible child: they absorb whatever is left
-        // after the numbers and the controls, so the buttons can never be pushed
-        // off the bottom of the screen.
+        // The gauge is the only flexible child: it absorbs whatever is left
+        // after the numbers and the controls, so the buttons can never be
+        // pushed off the bottom of the screen.
         Box(
             Modifier
                 .fillMaxWidth()
@@ -153,19 +173,113 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
                     hr = state.hr,
                     zoneLabel = state.zone?.label,
                     zoneColor = state.zone?.color() ?: JwColors.Muted,
-                    phaseText = phaseText(state.phase, state.setNumber, state.totalSets),
-                    phaseColor = phaseColor,
-                    countdown = TimeMath.mmss(state.segmentRemainingSec),
+                    phaseText = when {
+                        state.interrupted -> "CALL"
+                        state.isCooling -> "COOL-DOWN"
+                        else -> phaseText(state.mode, state.phase, state.setNumber, state.totalSets)
+                    },
+                    phaseColor = if (state.interrupted) JwColors.Gold else phaseColor,
+                    countdown = if (state.isCooling) {
+                        TimeMath.mmss(state.coolDownSec)
+                    } else {
+                        TimeMath.mmss(state.segmentRemainingSec)
+                    },
                     idleHint = if (active) null else "$plannedMinutes min",
                 )
             }
+
+            // Over the gauge, not in the layout: the flash must not move
+            // anything, and it must not swallow a tap on the dial behind it.
+            // A local, because `state` is a delegated property and Kotlin will
+            // not smart-cast its nullable phase through the delegate.
+            val flashPhase = state.phase
+            SetFlash(
+                key = if (active) state.setNumber to flashPhase else null,
+                text = when (flashPhase) {
+                    Phase.WARMUP -> "WARM-UP"
+                    Phase.COOLDOWN -> "COOL-DOWN"
+                    else -> "${state.setNumber}"
+                },
+                caption = when (flashPhase) {
+                    null, Phase.WARMUP, Phase.COOLDOWN -> null
+                    else -> "${state.mode.label(flashPhase)} · set of ${state.totalSets}"
+                },
+                colour = phaseColor,
+            )
         }
 
         Spacer(Modifier.height(4.dp))
         HorizontalDivider(color = JwColors.Outline.copy(alpha = 0.5f))
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
 
-        ZoneThermometer(activeZone = state.zone)
+        SetLine(
+            phase = state.phase,
+            setNumber = state.setNumber,
+            totalSets = if (state.isActive) state.totalSets else shape.sets,
+            segmentElapsedSec = state.segmentElapsedSec,
+            segmentTotalSec = state.segmentTotalSec,
+            isCooling = state.isCooling,
+            coolDownSec = state.coolDownSec,
+            mode = if (state.isActive) state.mode else settings.mode,
+        )
+        Spacer(Modifier.height(5.dp))
+        SetProgress(
+            sets = shape.sets,
+            slowSec = shape.slowSec,
+            fastSec = shape.fastSec,
+            startWithSlow = shape.startWithSlow,
+            elapsedSec = state.planElapsedSec,
+            offsetSec = shape.warmupSec,
+        )
+
+        // Only while riding: before the session starts there is no target and no
+        // cadence, and three tiles of dashes are worse than none.
+        if (active && state.mode == WorkoutMode.CYCLE) {
+            Spacer(Modifier.height(6.dp))
+            // What the trainer was told, what it is doing, and how fast you are
+            // turning the cranks — the three numbers you actually steer by on a
+            // bike, in the same place the walk screen keeps its pace figures.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                val resistanceMode = state.controlMode == TrainerControlMode.RESISTANCE
+                StatTile(
+                    label = if (resistanceMode) "target res" else "target",
+                    value = when {
+                        !state.trainerControlling -> "manual"
+                        resistanceMode -> state.trainerTarget.toString()
+                        else -> "${state.trainerTarget} W"
+                    },
+                    modifier = Modifier.weight(1f),
+                    accent = if (state.trainerControlling) JwColors.Gold else JwColors.Muted,
+                    dense = true,
+                )
+                StatTile(
+                    label = if (resistanceMode) "resistance" else "power",
+                    value = when {
+                        resistanceMode -> if (state.resistanceLevel > 0) {
+                            state.resistanceLevel.toString()
+                        } else {
+                            "--"
+                        }
+                        state.powerW > 0 -> "${state.powerW} W"
+                        else -> "--"
+                    },
+                    modifier = Modifier.weight(1f),
+                    accent = JwColors.Gold,
+                    dense = true,
+                )
+                StatTile(
+                    label = "cadence rpm",
+                    value = buildString {
+                        append(if (state.cadenceRpm > 0) state.cadenceRpm.toString() else "--")
+                        append(" / ")
+                        append(state.targetCadenceSpm)
+                    },
+                    modifier = Modifier.weight(1f),
+                    accent = JwColors.Accent,
+                    dense = true,
+                )
+            }
+        }
 
         Spacer(Modifier.height(6.dp))
         HorizontalDivider(color = JwColors.Outline.copy(alpha = 0.5f))
@@ -173,7 +287,12 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             StatTile("elapsed", TimeMath.mmss(state.elapsedSec), Modifier.weight(1f), dense = true)
-            StatTile("left", TimeMath.mmss(state.remainingSec), Modifier.weight(1f), dense = true)
+            StatTile(
+                if (state.isCooling) "extra" else "left",
+                if (state.isCooling) TimeMath.mmss(state.coolDownSec) else TimeMath.mmss(state.remainingSec),
+                Modifier.weight(1f),
+                dense = true,
+            )
             StatTile("kcal", state.kcal.toString(), Modifier.weight(1f), JwColors.Fast, dense = true)
             StatTile(
                 "avg hr",
@@ -183,55 +302,53 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
             )
         }
 
-        val np = state.nowPlaying
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            StrapLine(state.hrmState, state.strapStale, Modifier.weight(1f))
-            if (active && np != null) {
-                OutlinedButton(
-                    onClick = { WorkoutService.send(context, WorkoutService.ACTION_TOGGLE_MUSIC) },
-                    shape = RoundedCornerShape(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                ) { Text(if (musicMuted) "Unmute" else "Mute") }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(
-                    onClick = { WorkoutService.send(context, WorkoutService.ACTION_NEXT_TRACK) },
-                    shape = RoundedCornerShape(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                ) { Text("Skip track") }
-            }
-        }
-
-        // One scrolling line rather than a four-row card.
-        if (np != null) {
+        // The tiles above say what the trainer is doing; this line only appears
+        // when it is not doing it, because then there is something to act on.
+        if (state.mode == WorkoutMode.CYCLE && active && !state.trainerControlling) {
             Text(
-                buildString {
-                    append(np.title)
-                    np.artist?.let { append(" — $it") }
-                    append("   ·   ${np.trackBpm.toInt()} bpm")
-                    if (np.multiplier != 1.0) append(" x${np.multiplier}")
-                    append(" → ${np.effectiveBpm.toInt()} bpm")
-                    if (np.stretchPercent != 0) {
-                        append(" (${if (np.stretchPercent > 0) "+" else ""}${np.stretchPercent}%)")
-                    }
-                    append("   ·   target ${np.targetBpm} spm")
+                if (state.trainerConnected) {
+                    "Trainer connected but not accepting control — change resistance yourself"
+                } else {
+                    "No trainer — change resistance yourself"
                 },
-                style = MaterialTheme.typography.titleMedium,
-                color = if (musicMuted) JwColors.Muted else phaseColor,
+                style = MaterialTheme.typography.labelSmall,
+                color = JwColors.Gold,
                 maxLines = 1,
-                softWrap = false,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp)
-                    .basicMarquee(),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
+
+        MusicRow(
+            nowPlaying = state.nowPlaying,
+            muted = musicMuted,
+            status = state.musicStatus,
+            controlsEnabled = active,
+            accent = phaseColor,
+            leading = { StrapLine(state.hrmState, state.strapStale, Modifier.fillMaxWidth()) },
+        )
 
         Spacer(Modifier.height(6.dp))
         HorizontalDivider(color = JwColors.Outline.copy(alpha = 0.5f))
         Spacer(Modifier.height(8.dp))
 
-        if (active) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        when {
+            state.isCooling -> {
+                Text(
+                    "Plan done — keep walking gently. Still counting minutes and calories " +
+                        "until your heart rate settles.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JwColors.Muted,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                )
+                Button(
+                    onClick = { WorkoutService.send(context, WorkoutService.ACTION_STOP) },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(26.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = JwColors.Accent),
+                ) { Text("Finish and save", color = Color.White, fontWeight = FontWeight.Bold) }
+            }
+
+            active -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { WorkoutHub.togglePause() },
                     modifier = Modifier.weight(1f).height(52.dp),
@@ -256,15 +373,19 @@ fun WalkScreen(onFinished: () -> Unit = {}, vm: WalkViewModel = viewModel()) {
                     colors = ButtonDefaults.buttonColors(containerColor = JwColors.Danger),
                 ) { Text("Finish", color = Color.White, fontWeight = FontWeight.Bold) }
             }
-        } else {
-            Button(
+
+            else -> Button(
                 onClick = { requestStart() },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(28.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = JwColors.Slow),
             ) {
                 Text(
-                    "Start $plannedMinutes-min IWT walk",
+                    if (settings.mode == WorkoutMode.CYCLE) {
+                        "Start $plannedMinutes-min interval ride"
+                    } else {
+                        "Start $plannedMinutes-min IWT walk"
+                    },
                     color = Color.Black,
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleMedium,
@@ -329,9 +450,13 @@ private fun StrapLine(state: HrmState, stale: Boolean, modifier: Modifier = Modi
     }
 }
 
-private fun phaseText(phase: Phase?, setNumber: Int, totalSets: Int): String = when (phase) {
-    Phase.FAST -> "FAST · $setNumber/$totalSets"
-    Phase.SLOW -> "SLOW · $setNumber/$totalSets"
+private fun phaseText(
+    mode: WorkoutMode,
+    phase: Phase?,
+    setNumber: Int,
+    totalSets: Int,
+): String = when (phase) {
+    Phase.FAST, Phase.SLOW -> "${mode.label(phase)} · $setNumber/$totalSets"
     Phase.WARMUP -> "WARM-UP"
     Phase.COOLDOWN -> "COOL-DOWN"
     null -> "READY"

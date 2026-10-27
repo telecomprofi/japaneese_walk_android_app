@@ -141,11 +141,32 @@ class DistanceAndPaceTest {
     fun `metric selection round trips through preferences`() {
         val chosen = listOf(DataMetric.BPM, DataMetric.DISTANCE, DataMetric.CALORIES)
         assertEquals(chosen, DataMetric.parse(DataMetric.serialise(chosen)))
-        // Unknown or empty keys fall back to the default set rather than nothing.
-        assertEquals(DataMetric.DEFAULT, DataMetric.parse(""))
-        assertEquals(DataMetric.DEFAULT, DataMetric.parse("nonsense,rubbish"))
+        // Unknown or empty keys fall back to the walking set rather than nothing.
+        // Not DEFAULT: that now includes the trainer tiles, and a walker with no
+        // trainer would get three blank squares.
+        assertEquals(DataMetric.WALK_DEFAULT, DataMetric.parse(""))
+        assertEquals(DataMetric.WALK_DEFAULT, DataMetric.parse("nonsense,rubbish"))
         assertEquals(listOf(DataMetric.BPM), DataMetric.parse("bpm,nonsense"))
-        assertEquals(9, DataMetric.entries.size)
+        assertEquals(13, DataMetric.entries.size)
         assertTrue(DataMetric.DISTANCE.needsGps && !DataMetric.BPM.needsGps)
+        assertTrue(DataMetric.POWER.needsTrainer && !DataMetric.BPM.needsTrainer)
+    }
+
+    @Test
+    fun `each mode's default tiles are all fillable in that mode`() {
+        // The point of two default sets: a tile that can never be filled in the
+        // mode it is shown in reads as "you are not moving", not "not measured".
+        assertEquals(9, DataMetric.WALK_DEFAULT.size)
+        assertTrue(DataMetric.WALK_DEFAULT.none { it.needsTrainer })
+        assertEquals(9, DataMetric.CYCLE_DEFAULT.size)
+        assertTrue(DataMetric.CYCLE_DEFAULT.none { it.needsGps })
+        // Both keep the four that need nothing at all.
+        listOf(DataMetric.BPM, DataMetric.AVG_BPM, DataMetric.CALORIES, DataMetric.KCAL_PER_MIN)
+            .forEach {
+                assertTrue("$it missing from walk", it in DataMetric.WALK_DEFAULT)
+                assertTrue("$it missing from cycle", it in DataMetric.CYCLE_DEFAULT)
+            }
+        // And every default entry survives a round trip through preferences.
+        assertEquals(DataMetric.CYCLE_DEFAULT, DataMetric.parse(DataMetric.serialise(DataMetric.CYCLE_DEFAULT)))
     }
 }

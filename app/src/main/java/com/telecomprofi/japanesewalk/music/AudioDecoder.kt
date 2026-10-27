@@ -6,6 +6,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import android.util.Log
+import com.telecomprofi.japanesewalk.core.Loudness
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -19,7 +20,15 @@ private const val TAG = "AudioDecoder"
  */
 object AudioDecoder {
 
-    data class Decoded(val mono: FloatArray, val sampleRate: Int, val durationUs: Long)
+    data class Decoded(
+        val mono: FloatArray,
+        val sampleRate: Int,
+        val durationUs: Long,
+        /** Integrated loudness of the excerpt, LUFS, or null if unmeasurable. */
+        val lufs: Double? = null,
+        /** Largest absolute sample, before any weighting. */
+        val peak: Float = 0f,
+    )
 
     /**
      * @param startFraction where in the track to begin (0.25 skips intros).
@@ -128,8 +137,14 @@ object AudioDecoder {
 
                 if (out.size < sampleRate) return null
                 val native = out.toArray()
+                // Loudness is measured on the native-rate samples, not on the
+                // 11 kHz analysis copy: K-weighting shelves above 1.7 kHz, and
+                // the crude decimation used for onset detection throws most of
+                // that away. Tempo does not care; loudness very much does.
+                val lufs = Loudness.integratedLufs(native, sampleRate)
+                val peak = Loudness.peak(native)
                 val mono = TempoEstimator.resampleMono(native, sampleRate)
-                return Decoded(mono, TempoEstimator.ANALYSIS_SR, durationUs)
+                return Decoded(mono, TempoEstimator.ANALYSIS_SR, durationUs, lufs, peak)
             }
         } catch (e: Exception) {
             Log.w(TAG, "decode failed for $uri: ${e.message}")

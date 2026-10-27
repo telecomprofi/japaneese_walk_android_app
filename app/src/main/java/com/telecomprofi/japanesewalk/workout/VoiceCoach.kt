@@ -5,14 +5,21 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.telecomprofi.japanesewalk.core.Phase
+import com.telecomprofi.japanesewalk.core.SpokenNumbers
 import com.telecomprofi.japanesewalk.core.TargetVerdict
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import java.util.Locale
 
 private const val TAG = "VoiceCoach"
+
+/** How often the engine is asked whether it is still talking. */
+private const val POLL_MS = 300L
 
 /**
  * Spoken coaching. Runs through the platform TTS engine with the
@@ -37,8 +44,29 @@ class VoiceCoach(
     private val pending = ArrayDeque<Pair<String, Boolean>>()
     private var utteranceCounter = 0
 
-    /** Touched from the TTS callback thread and from callers, hence atomic. */
-    private val speaking = java.util.concurrent.atomic.AtomicInteger(0)
+    /**
+     * While true, nothing is spoken and nothing is queued. Set during a phone
+     * call: coaching over someone else's voice is worse than no coaching.
+     */
+    @Volatile
+    private var suppressed = false
+
+    /**
+     * Whether the coach is talking — and how that is decided, which turns out to
+     * matter more than anything else in this file.
+     *
+     * It used to be a count: up on onStart, down on onDone. That count can stick
+     * above zero forever, because an utterance flushed from the queue by an
+     * urgent cue (every interval change uses QUEUE_FLUSH) is often never
+     * reported done at all. A stuck count meant the music was ducked to a tenth
+     * of its volume for the rest of the walk — playing, title changing at every
+     * interval, and inaudible. So the count is now only a fast path to duck
+     * *quickly*, and the decision to un-duck belongs to a poll of the engine's
+     * own [TextToSpeech.isSpeaking], which cannot get out of step with reality.
+     */
+    private val handler = Handler(Looper.getMainLooper())
+    private var active = false
+    private var quietPolls = 0
 
     init {
         tts = TextToSpeech(context.applicationContext) { status ->
@@ -52,24 +80,16 @@ class VoiceCoach(
                         .build()
                 )
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        if (speaking.incrementAndGet() == 1) duckOthers(true)
-                        onSpeechActive(true)
-                    }
+                    override fun onStart(utteranceId: String?) = setActive(true)
 
-                    override fun onDone(utteranceId: String?) = finished()
+                    // Done and error only hurry the poll along; they are never
+                    // trusted to end the duck on their own.
+                    override fun onDone(utteranceId: String?) = pollSoon()
 
                     @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) = finished()
+                    override fun onError(utteranceId: String?) = pollSoon()
 
-                    override fun onError(utteranceId: String?, errorCode: Int) = finished()
-
-                    private fun finished() {
-                        if (speaking.updateAndGet { (it - 1).coerceAtLeast(0) } == 0) {
-                            duckOthers(false)
-                            onSpeechActive(false)
-                        }
-                    }
+                    override fun onError(utteranceId: String?, errorCode: Int) = pollSoon()
                 })
                 while (pending.isNotEmpty()) {
                     val (text, flush) = pending.removeFirst()
@@ -87,8 +107,64 @@ class VoiceCoach(
         return if (engine.isLanguageAvailable(device) >= TextToSpeech.LANG_AVAILABLE) device else Locale.US
     }
 
+    /**
+     * The poll. Two quiet readings in a row — six hundred milliseconds of an
+     * engine that says it is not speaking — and the music comes back, whatever
+     * the callbacks did or did not report.
+     */
+    private val speechWatch = object : Runnable {
+        override fun run() {
+            val busy = try {
+                tts?.isSpeaking == true
+            } catch (e: Exception) {
+                false
+            }
+            if (busy) {
+                quietPolls = 0
+            } else if (++quietPolls >= 2) {
+                setActive(false)
+                return
+            }
+            handler.postDelayed(this, POLL_MS)
+        }
+    }
+
+    private fun setActive(value: Boolean) {
+        handler.post {
+            if (active == value) {
+                if (value) armPoll()
+                return@post
+            }
+            active = value
+            quietPolls = 0
+            duckOthers(value)
+            onSpeechActive(value)
+            if (value) armPoll() else handler.removeCallbacks(speechWatch)
+        }
+    }
+
+    private fun armPoll() {
+        handler.removeCallbacks(speechWatch)
+        handler.postDelayed(speechWatch, POLL_MS)
+    }
+
+    private fun pollSoon() {
+        handler.removeCallbacks(speechWatch)
+        handler.postDelayed(speechWatch, 120)
+    }
+
     fun setSpeechRate(rate: Float) {
         tts?.setSpeechRate(rate.coerceIn(0.5f, 2.0f))
+    }
+
+    /** Go quiet, or start talking again. Suppressing also drops the backlog. */
+    fun setSuppressed(value: Boolean) {
+        if (suppressed == value) return
+        suppressed = value
+        if (value) {
+            pending.clear()
+            stopSpeaking()
+        }
     }
 
     /**
@@ -96,7 +172,7 @@ class VoiceCoach(
      *        should jump the queue rather than land three seconds late.
      */
     fun say(text: String, interrupt: Boolean = false) {
-        if (text.isBlank()) return
+        if (text.isBlank() || suppressed) return
         if (!ready) {
             pending += text to interrupt
             while (pending.size > 6) pending.removeFirst()
@@ -106,6 +182,9 @@ class VoiceCoach(
     }
 
     private fun speakNow(text: String, interrupt: Boolean) {
+        // Duck before the engine opens its mouth, not when it does: the first
+        // word of an interval cue is the one worth hearing.
+        setActive(true)
         val mode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
         // Some engines default below full scale; say it explicitly so a cue is
         // never quieter than the music it has to carry over.
@@ -148,13 +227,14 @@ class VoiceCoach(
 
     fun stopSpeaking() {
         tts?.stop()
-        speaking.set(0)
-        duckOthers(false)
-        onSpeechActive(false)
+        setActive(false)
     }
 
     fun shutdown() {
-        duckOthers(false)
+        handler.removeCallbacks(speechWatch)
+        // Torn down mid-sentence, the music would otherwise be left ducked —
+        // which is audible during a cool-down that outlives the last cue.
+        setActive(false)
         try {
             tts?.stop()
             tts?.shutdown()
@@ -169,8 +249,15 @@ class VoiceCoach(
 /** All spoken copy in one place, so tone stays consistent and is easy to tweak. */
 object CoachScript {
 
-    fun sessionStart(totalMinutes: Int, sets: Int): String =
-        "Interval walking. $sets sets, $totalMinutes minutes. Start easy and let your heart rate settle."
+    fun sessionStart(totalMinutes: Int, sets: Int, mode: WorkoutMode = WorkoutMode.WALK): String {
+        val what = if (mode == WorkoutMode.CYCLE) "Interval ride" else "Interval walking"
+        return "$what. ${SpokenNumbers.cardinal(sets)} sets, $totalMinutes minutes. " +
+            "Start easy and let your heart rate settle."
+    }
+
+    /** Said when the trainer refuses control, so the rider knows to shift by hand. */
+    fun trainerManual(): String =
+        "No control of the trainer. Change the resistance yourself when I call the interval."
 
     /**
      * Bouts are announced with the whole range, never a single number — the
@@ -182,13 +269,28 @@ object CoachScript {
         totalSets: Int,
         lowBpm: Int,
         highBpm: Int,
-    ): String = when (phase) {
-        Phase.FAST ->
-            "Fast interval. Set $setNumber of $totalSets. Aim for $lowBpm to $highBpm."
-        Phase.SLOW ->
-            "Ease off. Slow walk, set $setNumber of $totalSets. Keep it under $highBpm."
-        Phase.WARMUP -> "Warming up. Easy pace, under $highBpm."
-        Phase.COOLDOWN -> "Cool down. Nice and gentle now."
+        mode: WorkoutMode = WorkoutMode.WALK,
+        /** e.g. "130 watts" when the app is driving a trainer, else null. */
+        targetText: String? = null,
+        /** True when the rider has to change the resistance themselves. */
+        manualResistance: Boolean = false,
+    ): String {
+        val target = targetText?.let { " $it." } ?: ""
+        return when (phase) {
+            Phase.FAST -> {
+                val shift = if (manualResistance) " Resistance up." else ""
+                "${mode.hardSpoken}. ${SpokenNumbers.ordinalSentence(setNumber)} set of " +
+                    "${SpokenNumbers.cardinal(totalSets)}.$target$shift " +
+                    "Aim for $lowBpm to $highBpm."
+            }
+            Phase.SLOW -> {
+                val shift = if (manualResistance) " Resistance down." else ""
+                "${mode.easySpoken}, ${SpokenNumbers.setOf(setNumber, totalSets)}.$target$shift " +
+                    "Keep it under $highBpm."
+            }
+            Phase.WARMUP -> "Warming up. Easy pace, under $highBpm."
+            Phase.COOLDOWN -> "Cool down. Nice and gentle now."
+        }
     }
 
     fun countdown(seconds: Int, next: Phase?): String {
@@ -205,13 +307,21 @@ object CoachScript {
      * Correction copy. On the slow bout only the ceiling is ever mentioned:
      * a low heart rate during recovery is the goal, so it is never flagged.
      */
-    fun drift(verdict: TargetVerdict, phase: Phase, lowBpm: Int, highBpm: Int): String {
+    fun drift(
+        verdict: TargetVerdict,
+        phase: Phase,
+        lowBpm: Int,
+        highBpm: Int,
+        mode: WorkoutMode = WorkoutMode.WALK,
+    ): String {
         val isRecovery = phase != Phase.FAST
+        val more = if (mode == WorkoutMode.CYCLE) "a little more effort" else "a little more pace"
+        val lift = if (mode == WorkoutMode.CYCLE) "Push a bit harder" else "Lift the pace"
         return when (verdict) {
             TargetVerdict.WAY_BELOW ->
-                if (isRecovery) "" else "Under the band. Lift the pace — you want at least $lowBpm."
+                if (isRecovery) "" else "Under the band. $lift — you want at least $lowBpm."
             TargetVerdict.BELOW ->
-                if (isRecovery) "" else "Just under $lowBpm. A little more pace."
+                if (isRecovery) "" else "Just under $lowBpm. ${more.replaceFirstChar { it.uppercase() }}."
             TargetVerdict.ABOVE ->
                 if (isRecovery) "Still above $highBpm. Slow down and let it drop."
                 else "A touch over $highBpm. Settle back into the band."
@@ -224,16 +334,34 @@ object CoachScript {
 
     fun halfway(): String = "Halfway. Same again."
 
+    /**
+     * The plan is done but the strap is still on. Said instead of the closing
+     * summary, which now waits until the cool-down has actually finished.
+     */
+    fun planComplete(minutes: Int): String =
+        "That is the $minutes minutes. Keep walking gently — still counting while your heart rate comes down."
+
+    fun backFromCall(): String = "Back to it."
+
     fun strapLost(): String = "Lost the heart rate strap. Checking again."
 
     fun strapBack(): String = "Heart rate back."
 
-    fun finished(minutes: Int, kcal: Int, adherence: Int, weekMinutes: Int, weekTarget: Int): String {
+    fun finished(
+        minutes: Int,
+        kcal: Int,
+        adherence: Int,
+        weekMinutes: Int,
+        weekTarget: Int,
+        coolDownMinutes: Int = 0,
+    ): String {
         val week = if (weekMinutes >= weekTarget) {
             "That clears your $weekTarget minute week."
         } else {
             "${(weekTarget - weekMinutes).coerceAtLeast(0)} minutes left this week."
         }
-        return "Session complete. $minutes minutes, $kcal calories, $adherence percent on target. $week"
+        val cool = if (coolDownMinutes > 0) " Including $coolDownMinutes of cool-down." else ""
+        return "Session complete. $minutes minutes, $kcal calories, " +
+            "$adherence percent on target.$cool $week"
     }
 }

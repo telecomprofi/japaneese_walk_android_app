@@ -2,7 +2,11 @@ package com.telecomprofi.japanesewalk.data.repo
 
 import com.telecomprofi.japanesewalk.core.IntervalPlan
 import com.telecomprofi.japanesewalk.core.SessionDots
+import com.telecomprofi.japanesewalk.core.WorkoutMode
+import com.telecomprofi.japanesewalk.core.DayLoad
 import com.telecomprofi.japanesewalk.core.TimeMath
+import com.telecomprofi.japanesewalk.core.TrainingLoad
+import com.telecomprofi.japanesewalk.core.TrainingStatus
 import com.telecomprofi.japanesewalk.data.db.AppDatabase
 import com.telecomprofi.japanesewalk.data.prefs.AppPrefs
 import com.telecomprofi.japanesewalk.game.Reminder
@@ -51,6 +55,83 @@ class StatsRepository(
             now to settings.reminders.weeklyTargetMinutes
         }.mapLatest { (now, target) -> buildSummary(now, target) }
 
+    /** Fitness, fatigue and what to do today, from the last six weeks of walks. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val trainingStatus: Flow<TrainingStatus> =
+        combine(minuteTicker, prefs.settings, sessions.sessionCount()) { now, _, _ -> now }
+            .mapLatest { now -> buildTrainingStatus(now) }
+
+    /**
+     * Six weeks of daily load. The window is the fitness time constant: shorter
+     * and the slow average never settles, longer and it is remembering walks
+     * that stopped mattering.
+     */
+    suspend fun buildTrainingStatus(now: Long = clock()): TrainingStatus {
+        val profile = prefs.settings.first().profile
+        val from = TimeMath.startOfDayMillis(now) - (TrainingLoad.FITNESS_DAYS.toLong() - 1) * DAY_MS
+        val rows = sessions.betweenOnce(from, now + DAY_MS)
+        val perSession = rows.map { session ->
+            DayLoad(
+                date = TimeMath.localDate(session.startedAt),
+                trimp = TrainingLoad.trimp(
+                    minutes = session.elapsedSec / 60.0,
+                    avgHr = session.avgHr,
+                    restingHr = profile.restingHr,
+                    maxHr = profile.maxHr,
+                    isMale = profile.isMale,
+                ),
+                minutes = session.elapsedSec / 60,
+                sessions = 1,
+            )
+        }
+        val days = TrainingLoad.fill(
+            days = perSession,
+            from = TimeMath.localDate(from),
+            to = TimeMath.localDate(now),
+        )
+        return TrainingLoad.status(days)
+    }
+
+    /** The seven-day table, rebuilt whenever a session lands or the minute turns. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val weekTable: Flow<WeekTable> =
+        combine(minuteTicker, prefs.settings, sessions.sessionCount()) { now, settings, _ ->
+            now to settings.reminders.weeklyTargetMinutes
+        }.mapLatest { (now, target) -> buildWeekTable(now, target) }
+
+    /**
+     * Monday to Sunday of the week containing [now]. Days are built from the
+     * sessions themselves rather than seven aggregate queries: a week is a
+     * handful of rows, and this way each day can also say what it was spent on.
+     */
+    suspend fun buildWeekTable(now: Long = clock(), targetMinutes: Int? = null): WeekTable {
+        val target = targetMinutes ?: prefs.settings.first().reminders.weeklyTargetMinutes
+        val weekStart = TimeMath.startOfWeekMillis(now)
+        val rows = sessions.betweenOnce(weekStart, weekStart + WEEK_MS)
+        val today = TimeMath.startOfDayMillis(now)
+
+        val days = (0 until 7).map { index ->
+            // Built by date, not by adding 24 hours seven times: the week a
+            // clock change falls in has a 23- and a 25-hour day in it.
+            val dayStart = TimeMath.startOfDayMillis(weekStart + index * DAY_MS + DAY_MS / 2)
+            val dayEnd = TimeMath.startOfDayMillis(weekStart + (index + 1) * DAY_MS + DAY_MS / 2)
+            val ofDay = rows.filter { it.startedAt in dayStart until dayEnd }
+            val seconds = ofDay.sumOf { it.elapsedSec }
+            DayStat(
+                dayStartMillis = dayStart,
+                label = TimeMath.dayName(dayStart),
+                minutes = seconds / 60,
+                kcal = ofDay.sumOf { it.kcal },
+                sessions = ofDay.size,
+                avgHr = if (seconds == 0) 0 else
+                    ofDay.sumOf { it.avgHr * it.elapsedSec } / seconds,
+                modes = ofDay.map { it.workoutMode },
+                isToday = dayStart == today,
+            )
+        }
+        return WeekTable(weekStartMillis = weekStart, days = days, targetMinutes = target)
+    }
+
     suspend fun buildWeekStats(now: Long = clock(), targetMinutes: Int? = null): WeekStats {
         val target = targetMinutes ?: prefs.settings.first().reminders.weeklyTargetMinutes
         val weekStart = TimeMath.startOfWeekMillis(now)
@@ -97,11 +178,13 @@ class StatsRepository(
         }
 
         val weekCompleted = sessions.completedBetween(weekStart, weekStart + WEEK_MS)
-        val sessionMinutes = IntervalPlan(prefs.settings.first().protocol).totalSec / 60
+        val weekModes = sessions.completedModesBetween(weekStart, weekStart + WEEK_MS)
+            .map { WorkoutMode.entries.getOrElse(it) { WorkoutMode.WALK } }
+        val sessionMinutes = prefs.settings.first().let { IntervalPlan(it.protocol, it.profile.intensityModel) }.totalSec / 60
 
         return SummaryStats(
-            dots = SessionDots.of(
-                completed = weekCompleted,
+            dots = SessionDots.withModes(
+                completedModes = weekModes,
                 partial = (week.sessions - weekCompleted).coerceAtLeast(0),
                 targetMinutes = target,
                 sessionMinutes = sessionMinutes,
@@ -127,7 +210,7 @@ class StatsRepository(
             weekMinutes = week.minutes,
             targetMinutes = week.targetMinutes,
             daysLeftInWeek = week.daysLeft,
-            sessionMinutes = IntervalPlan(settings.protocol).totalSec / 60,
+            sessionMinutes = IntervalPlan(settings.protocol, settings.profile.intensityModel).totalSec / 60,
             walkedToday = week.walkedToday,
         )
     }

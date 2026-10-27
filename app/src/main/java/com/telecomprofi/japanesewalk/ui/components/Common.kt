@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,8 +18,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -31,8 +34,31 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.telecomprofi.japanesewalk.core.SessionCircle
 import com.telecomprofi.japanesewalk.core.SessionDot
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import com.telecomprofi.japanesewalk.ui.theme.JwColors
+import com.telecomprofi.japanesewalk.ui.theme.color
+
+/**
+ * The name of a group of settings, with a rule under it. Cards on their own gave
+ * a long settings page no shape — you could see eleven boxes and no order. This
+ * is the cheapest thing that says "these three belong together".
+ */
+@Composable
+fun GroupHeader(title: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = JwColors.Accent,
+            letterSpacing = 1.6.sp,
+        )
+        Spacer(Modifier.height(6.dp))
+        HorizontalDivider(thickness = 1.dp, color = JwColors.Muted.copy(alpha = 0.28f))
+    }
+}
 
 @Composable
 fun SectionCard(
@@ -55,6 +81,71 @@ fun SectionCard(
                 Spacer(Modifier.height(10.dp))
             }
             content()
+        }
+    }
+}
+
+/**
+ * A number with the picture of what it measures over it. The icons are what make
+ * a row of six figures readable at a glance on the way back from a walk — the
+ * flame is calories before you have read the word.
+ */
+@Composable
+fun IconStat(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    accent: Color = JwColors.OnSurface,
+) {
+    Column(modifier = modifier.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = accent,
+            maxLines = 1,
+        )
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = JwColors.Muted,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * The three zones as one bar, in proportion to the time spent in each. A stacked
+ * bar rather than three numbers because the shape of a good interval session is
+ * recognisable: a green third, a yellow sliver, an orange half.
+ */
+@Composable
+fun ZoneBar(
+    secondsPerZone: List<Int>,
+    modifier: Modifier = Modifier,
+    height: androidx.compose.ui.unit.Dp = 8.dp,
+) {
+    val total = secondsPerZone.sum().coerceAtLeast(1)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(4.dp))
+            .background(JwColors.Track),
+    ) {
+        com.telecomprofi.japanesewalk.core.HrZone.entries.forEachIndexed { index, zone ->
+            val seconds = secondsPerZone.getOrElse(index) { 0 }
+            if (seconds > 0) {
+                Box(
+                    Modifier
+                        .weight(seconds.toFloat() / total)
+                        .fillMaxHeight()
+                        .background(zone.color()),
+                )
+            }
         }
     }
 }
@@ -125,7 +216,7 @@ fun ThinProgressBar(
  */
 @Composable
 fun SessionDotsRow(
-    dots: List<SessionDot>,
+    dots: List<SessionCircle>,
     modifier: Modifier = Modifier,
     diameter: androidx.compose.ui.unit.Dp = 34.dp,
 ) {
@@ -133,7 +224,8 @@ fun SessionDotsRow(
         modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        dots.forEach { dot ->
+        dots.forEach { circle ->
+            val dot = circle.state
             Box(
                 Modifier
                     .size(diameter)
@@ -151,11 +243,22 @@ fun SessionDotsRow(
                 contentAlignment = Alignment.Center,
             ) {
                 if (dot == SessionDot.DONE) {
+                    // A walker or a bicycle rather than a tick, so a week of
+                    // three walks and two rides reads as such at a glance. Older
+                    // sessions predate the distinction and show the walker.
                     Icon(
-                        Icons.Filled.Check,
-                        contentDescription = "completed session",
+                        if (circle.mode == WorkoutMode.CYCLE) {
+                            Icons.AutoMirrored.Filled.DirectionsBike
+                        } else {
+                            Icons.AutoMirrored.Filled.DirectionsWalk
+                        },
+                        contentDescription = if (circle.mode == WorkoutMode.CYCLE) {
+                            "completed ride"
+                        } else {
+                            "completed walk"
+                        },
                         tint = Color(0xFF0A2E16),
-                        modifier = Modifier.size(diameter * 0.62f),
+                        modifier = Modifier.size(diameter * 0.60f),
                     )
                 }
             }

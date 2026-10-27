@@ -17,7 +17,9 @@ import com.telecomprofi.japanesewalk.game.Notifications
 import com.telecomprofi.japanesewalk.hrm.BleHeartRateMonitor
 import com.telecomprofi.japanesewalk.hrm.HeartRateSource
 import com.telecomprofi.japanesewalk.hrm.SimulatedHeartRateSource
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import com.telecomprofi.japanesewalk.music.WorkoutMusicPlayer
+import com.telecomprofi.japanesewalk.trainer.TrainerControl
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -57,9 +59,19 @@ class WorkoutService : LifecycleService() {
     private var music: WorkoutMusicPlayer? = null
     private var source: HeartRateSource? = null
     private var location: LocationTracker? = null
+    private var trainer: TrainerControl? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var interruptions: AudioInterruptions? = null
     private var notificationTick = 0
     private var musicMuted = false
+    /** Whether the user had already muted the music when a call arrived. */
+    private var mutedBeforeCall = false
+    /**
+     * beginSession() suspends twice before assigning [engine], so a null check
+     * alone is not a lock — two quick Start taps built two engines, two straps
+     * and two voice coaches, and the first became an unstoppable orphan.
+     */
+    private var starting = false
 
     /**
      * Hand the soundtrack over to another app, or take it back. Pausing rather
@@ -78,7 +90,7 @@ class WorkoutService : LifecycleService() {
         when (intent?.action) {
             ACTION_START -> {
                 promoteToForeground(WorkoutHub.state.value)
-                if (engine == null) beginSession()
+                if (engine == null && !starting) beginSession()
             }
             ACTION_PAUSE -> engine?.pause()
             ACTION_RESUME -> engine?.resume()
@@ -110,14 +122,28 @@ class WorkoutService : LifecycleService() {
         ServiceCompat.startForeground(
             this,
             Notifications.ID_WORKOUT,
-            Notifications.workout(this, state),
+            Notifications.workout(this, state, musicMuted),
             foregroundServiceType(),
         )
     }
 
     private fun beginSession() {
         Graph.init(this)
+        starting = true
         lifecycleScope.launch {
+            try {
+                beginSessionInner()
+            } finally {
+                // Cleared on every exit path, including a throw from reading
+                // settings or the track table. Without this a single failed
+                // start wedged the guard and no later Start would be accepted.
+                starting = false
+            }
+        }
+    }
+
+    private suspend fun beginSessionInner() {
+        run {
             val settings = Graph.container.prefs.settings.first()
             WorkoutHub.setInfo(null)
             acquireWakeLock()
@@ -125,9 +151,14 @@ class WorkoutService : LifecycleService() {
             WorkoutHub.setExternalMusic(settings.music.enabled && settings.music.useExternalPlayer)
             val voice = VoiceCoach(
                 context = this@WorkoutService,
-                // Always take transient focus: it makes the system duck anything
-                // else that is playing, and costs nothing when we own the player.
-                duckViaAudioFocus = true,
+                // Only when the music is somebody else's. Asking the system to
+                // duck while we own the player makes it duck *us*: our ExoPlayer
+                // holds audio focus too, so it hears the transient loss, drops to
+                // a fifth of its volume, and a track that starts during the cue
+                // never gets the focus-gain that would lift it again. That is the
+                // bug where the music stayed quiet until you skipped the track.
+                // We already lower our own music in duck(), which needs no focus.
+                duckViaAudioFocus = player == null,
             ) { speaking -> player?.duck(speaking) }
             coach = voice
             music = player
@@ -137,15 +168,34 @@ class WorkoutService : LifecycleService() {
             // Indoors there is nothing for GPS to measure, so it is not started
             // at all — which is also why the foreground-service type below is
             // derived from whether a tracker exists, not from the permission.
+            // Indoors, and on a trainer, there is nothing for GPS to measure.
             val tracker = LocationTracker(this@WorkoutService)
-                .takeIf { it.hasPermission && !settings.indoorMode }
+                .takeIf { it.hasPermission && !settings.indoorMode && settings.mode.usesGps }
             location = tracker
+
+            // The trainer is only built for a ride, and only once one is paired;
+            // without it a cycling session still runs, coached rather than driven.
+            val bike = if (settings.mode == WorkoutMode.CYCLE && settings.cycle.deviceAddress != null) {
+                TrainerControl(this@WorkoutService).apply {
+                    setDevice(settings.cycle.deviceAddress, settings.cycle.deviceName)
+                }
+            } else {
+                null
+            }
+            trainer = bike
+            if (settings.mode == WorkoutMode.CYCLE && bike == null) {
+                WorkoutHub.setInfo("No trainer paired — pair one in Settings to set resistance")
+            }
 
             val workoutEngine = WorkoutEngine(
                 scope = lifecycleScope,
                 profile = settings.profile,
                 protocol = settings.protocol,
                 coachSettings = settings.coach,
+                coolDownSettings = settings.coolDown,
+                mode = settings.mode,
+                cycle = settings.cycle,
+                trainer = bike,
                 source = hrSource,
                 coach = voice,
                 music = player,
@@ -154,7 +204,24 @@ class WorkoutService : LifecycleService() {
             )
             engine = workoutEngine
             WorkoutHub.attach(workoutEngine)
-            player?.let { followPlaylist(it, settings, workoutEngine) }
+            player?.let { p ->
+                followPlaylist(p, settings, workoutEngine)
+                // Anything wrong with the music says so on the walk screen. It
+                // used to be silent in both senses.
+                lifecycleScope.launch {
+                    p.problem.collect { message ->
+                        if (message != null) WorkoutHub.setInfo(message)
+                    }
+                }
+                // A pause from the notification shade is a mute as far as the
+                // rest of the app is concerned, so the UI button agrees with it.
+                lifecycleScope.launch {
+                    p.mutedState.collect { muted ->
+                        musicMuted = muted
+                        WorkoutHub.setMusicMuted(muted)
+                    }
+                }
+            }
 
             lifecycleScope.launch {
                 workoutEngine.state.collect { state ->
@@ -172,7 +239,38 @@ class WorkoutService : LifecycleService() {
             }
 
             workoutEngine.start()
+            // Only once the engine is RUNNING: started any earlier, a call
+            // already in progress would set the interrupted flag against an
+            // IDLE engine, which pauses nothing and can never be undone.
+            startCallWatch()
         }
+    }
+
+    /**
+     * Pause the walk, and the coach, for the duration of a call.
+     *
+     * The voice cues are the real problem: they use navigation-guidance audio
+     * attributes, which the system is happy to mix straight into a call, so
+     * without this the other party hears "fast interval, set three of five".
+     */
+    private fun startCallWatch() {
+        if (interruptions != null) return
+        interruptions = AudioInterruptions(
+            context = this,
+            onCallStarted = {
+                coach?.setSuppressed(true)
+                // Remember whether the music was already off, or hanging up
+                // would start the playlist over someone's podcast.
+                mutedBeforeCall = music?.isMuted == true
+                music?.setMuted(true)
+                engine?.interrupt()
+            },
+            onCallEnded = {
+                coach?.setSuppressed(false)
+                music?.setMuted(mutedBeforeCall)
+                engine?.endInterruption()
+            },
+        ).also { it.start() }
     }
 
     /**
@@ -184,7 +282,17 @@ class WorkoutService : LifecycleService() {
         if (!settings.music.enabled) return null
         if (settings.music.useExternalPlayer) return null
         val tracks = Graph.container.db.trackDao().allOnce()
-        return WorkoutMusicPlayer(this).apply { prepare(tracks, settings.music) }
+        return WorkoutMusicPlayer(this).apply {
+            prepare(tracks, settings.music)
+            // A file this device can never decode is removed from the queue
+            // rather than skipped again on every future walk.
+            onTrackUnplayable = { uri, reason ->
+                lifecycleScope.launch {
+                    Log.w(TAG, "dropping unplayable track ($reason): $uri")
+                    Graph.container.db.trackDao().setMissing(uri, true)
+                }
+            }
+        }
     }
 
     /**
@@ -238,6 +346,7 @@ class WorkoutService : LifecycleService() {
                     adherence = result.adherencePercent,
                     weekMinutes = outcome.week.minutes,
                     weekTarget = outcome.week.targetMinutes,
+                    coolDownMinutes = result.coolDownMinutes,
                 ),
                 interrupt = true,
             )
@@ -262,6 +371,8 @@ class WorkoutService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        interruptions?.stop()
+        interruptions = null
         engine?.let { if (it.isSessionActive) it.stop() }
         // Clear the published state as well as the engine reference, so a later
         // visit to the Zones tab starts idle instead of replaying FINISHED.
@@ -269,6 +380,8 @@ class WorkoutService : LifecycleService() {
         WorkoutHub.setExternalMusic(false)
         source?.stop()
         location?.stop()
+        trainer?.stop()
+        trainer = null
         music?.release()
         coach?.shutdown()
         try {

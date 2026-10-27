@@ -35,7 +35,7 @@ class WalkViewModel : ViewModel() {
     val externalMusic = WorkoutHub.externalMusic
 
     val plannedMinutes: StateFlow<Int> = container.prefs.settings
-        .map { IntervalPlan(it.protocol).totalSec / 60 }
+        .map { IntervalPlan(it.protocol, it.profile.intensityModel).totalSec / 60 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 30)
 
     fun dismissOutcome() = WorkoutHub.consumeOutcome()

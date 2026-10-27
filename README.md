@@ -36,12 +36,20 @@ Android 13 (SDK 33) or newer. You will need to allow install from an unknown sou
 | **Protocol** | 5 sets × (3 min fast + 3 min slow), starting with the slow bout as per the published protocol. Sets, bout lengths, intensities, tolerance, warm-up and cool-down are all adjustable. |
 | **Intensity** | Karvonen — a share of **heart-rate reserve**: `HR = rest + pct × (max − rest)`. The figure you set is the **top of a range**, not a point to hit: with the default 20-point band, a 70% fast target means "anywhere from 50% to 70%" (roughly a 25 bpm window). The slow bout has a ceiling only — drifting lower is the goal and is never coached against. |
 | **Heart rate** | Any standard BLE strap (Polar, Garmin, Wahoo, Coospo, Magene…) via GATT Heart Rate Service `0x180D` / characteristic `0x2A37`, plus battery level `0x2A19`. Auto-reconnects with backoff. A **simulator** lets you try everything indoors with no hardware. |
-| **Gauge** | One thick 270° arc, filled proportionally to your heart rate: the part you have reached is painted in a gradient running green → yellow → orange through the zone bands, the part above it stays grey. It moves from well below resting heart rate upward, so it is never parked at the origin. The Data tab shows the same gradient as a 180° arc. Below the gauge an animated **zone thermometer** lights one segment per zone up to the zone you are in. |
+| **Gauge** | One thick 270° arc, filled proportionally to your heart rate: the part you have reached is painted in a gradient running green → yellow → orange through the zone bands, the part above it stays grey. It moves from well below resting heart rate upward, so it is never parked at the origin. The Data tab shows the same gradient as a 180° arc. Below it, one box per set — each split into its slow and fast bouts in proportion, painted light green and light orange as you work through them, the rest left dim so the shape of the whole session is visible from the first second. |
+| **Two modes** | **Walking** outdoors or on a treadmill, or **indoor cycling** on a smart trainer. Same protocol either way — five sets of three minutes hard and three easy, judged by heart rate — only the lever differs: your pace on foot, the trainer's resistance on a bike. |
+| **Zone model** | Two mutually exclusive scales, chosen in Settings. **% of heart-rate reserve** (Karvonen) is what the published protocol is written in. **% of max heart rate** with 220 − age is what a Galaxy Watch or Garmin shows — pick it and the zone boundaries *and* the interval targets both switch, so colours and coaching can never end up in different scales. |
 | **Zones** | Three zones by %HRR — **Z1 Easy** (green, up to 45%), **Z2 Brisk** (yellow, 45–58%), **Z3 Hard** (orange, above 58%). Mapped to the protocol rather than to a generic five-zone chart: the 40% slow bout sits in green, the 70% fast bout in orange, so the colour alone tells you whether you are on protocol. Bounds and colours live in one enum. |
+| **Expected heart rate** | A heart does not step. Asked to go from easy to brisk it takes a minute to arrive and as long to come back down, so the target range **ramps** across each bout change instead of jumping — a saw-tooth, not a square wave. The coach and the gauge both read the ramped band, which is what stops "well under target" firing at second three of a fast bout. Adjustable, 0 restores hard steps. |
+| **After the last bout** | The strap stays connected. Minutes and calories keep accruing as easy walking until your heart rate has settled back into zone 1 (or ten minutes pass), because people do not stop dead when the timer does. |
+| **Interruptions** | An incoming call pauses the walk, mutes the music and silences the coach — voice cues use navigation-guidance audio, which the system will happily mix straight into a call. It picks up again when you hang up, and does not un-mute music you had muted yourself. |
 | **Voice coach** | Spoken interval changes, countdowns, halfway call-out, off-range correction, strap-loss warnings, end-of-session summary. Deliberately reluctant: interval changes and countdowns are always on time, everything else waits for a quiet window (40 s by default), must have drifted for 35 s, and stays silent for the first 45 s of a bout while the heart catches up. All three are adjustable. Ducks the music while it speaks. |
-| **Music** | You build the playlist by hand. Scanning a folder you grant (typically the SD card or its `Music` folder) catalogues everything five levels down with its ID3 tags; you then **search by title, artist, album or file name** and add the tracks you want, or pick individual files straight from the system picker. Copies of the same song in more than one place are collapsed to one. Each queued track's tempo is measured on-device once and cached; during a walk the app picks the track closest to the target cadence and pitch-corrected time-stretches it (±8% by default) onto the beat. Or hand the job to another music app entirely — voice cues still duck it. Mute, unmute and skip tracks mid-walk. |
-| **Screens** | Five tabs, swipeable. **Summary** is the launch screen, kept sparse: the week's minutes against the goal, one circle per session — filled green with a tick once walked — and the Start button, with monthly figures behind *More*. **Walk** is a single fixed page of rings, thermometer and controls, no scrolling. **Data** carries the 180° arc and a grid of metric tiles you choose yourself. **Music** and **Settings** keep all their explanatory text behind an (i) button. Finishing a walk returns to Summary with refreshed totals. |
+| **Trainer control** | Over BLE FTMS (0x1826): reads power, cadence and speed from Indoor Bike Data, and **writes** the target back, so each bout sets its own resistance instead of asking you to shift. ERG (target watts) or resistance level. Because the bouts are prescribed in heart rate and how many watts that takes differs by person and by day, the target then *seeks*: small steps, well spaced, and the correction carries over to the next bout of the same kind rather than being re-learnt every three minutes. Calories come from measured work rather than the heart-rate model. |
+| **Music** | You build the playlist by hand. Scanning a folder you grant (typically the SD card or its `Music` folder) catalogues everything five levels down with its ID3 tags; you then **search by title, artist, album or file name** and add the tracks you want, or pick individual files straight from the system picker. Copies of the same song in more than one place are collapsed to one. Each queued track's tempo **and loudness** are measured on-device once and cached — loudness by EBU R 128 / ITU-R BS.1770 (K-weighting, 400 ms blocks, both gates), so a change of track in headphones does not startle you. Levelling works from the playlist's **median** loudness: the loud outliers come down, the quiet ones are lifted by an audio-effect gain, and the typical track is not touched at all. That last part matters — an earlier version levelled to the *quietest* track, which matched them perfectly and made the app half as loud as every other player on the phone. Both limits are adjustable, 8 dB down and 6 dB up by default. During a bout the app picks the track closest to the target cadence and pitch-corrected time-stretches it (±8% by default) onto the beat. Or hand the job to another music app entirely — voice cues still duck it. Mute, unmute and skip tracks mid-walk. |
+| **Notification** | Pause, finish, mute the music and skip a track from the shade without unlocking. A media session is published too, so lock-screen and headset transport buttons act on the playlist. |
+| **Screens** | Five tabs, swipeable. **Summary** is the launch screen, kept sparse: the week's minutes against the goal, one circle per session — filled green with a tick once walked — and the Start button, with monthly figures behind *More*. **Walk/Ride** is a single fixed page — gauge, set boxes and controls, no scrolling — and its tab icon follows the armed mode, walker or bicycle. **Data** carries the 180° arc and a grid of metric tiles you choose yourself. **Music** and **Settings** keep all their explanatory text behind an (i) button. Finishing a walk returns to Summary with refreshed totals. |
 | **Indoor / treadmill** | A switch under the Start button. GPS is never requested, the location permission is not needed, and the distance, pace and speed tiles read `--` instead of drifting. Everything else — intervals, zones, coach, music, calories — is unchanged. |
+| **Indoor cycling** | The same protocol on a smart trainer: five sets of three minutes hard and three easy, still judged by heart rate, with low/high resistance in place of slow/fast walking. Talks Bluetooth FTMS (0x1826) to read power and cadence and to **set the target itself** each bout — ERG watts or resistance level — so there is nothing to shift. Because the bouts are prescribed in heart rate and how many watts that takes differs by person and by day, the target creeps up or down between bouts until the heart rate sits in the band. Calories come from measured work rather than the heart-rate model. Tested against a Wahoo Kickr Core v2. |
 | **Stats** | Local Room database: duration, calories, avg/max HR, per-zone seconds, on-target %, completed sets, plus a per-session HR trace. |
 | **Weekly goal** | 150 min/week starting **Monday**: minutes, calories, % of target, days left, and one circle per planned session. A daily reminder states where the week stands and what would finish it — plainly, with no scores or streaks. |
 
@@ -191,9 +199,10 @@ The rule the tree follows: **anything that is a calculation lives in `core/` or 
 pure file, with no Android imports**, which is why it can be unit-tested on the JVM.
 Android objects appear only where they are unavoidable.
 
-`app/src/test/` holds the 60 tests: zone/Karvonen/calorie maths, the interval timeline
+`app/src/test/` holds the tests: zone/Karvonen/calorie maths, the interval timeline
 and accumulator, tempo estimation against synthetic click tracks, duplicate collapsing,
-the track matcher, session circles, reminder wording, and Monday/month-based date maths.
+the track matcher, session circles, reminder wording, Monday/month-based date maths, loudness measurement against synthetic tones, and every FTMS
+frame layout.
 
 ---
 
@@ -201,8 +210,13 @@ the track matcher, session circles, reminder wording, and Monday/month-based dat
 
 Everything below is one edit away:
 
-- **Zone bounds and colours** — `core/HrZone.kt`. The whole app (rings, chips, charts,
-  notification) reads from this enum; nothing else hard-codes a zone colour.
+- **Zone bounds and colours** — `core/HrZone.kt`. Each zone carries bounds for *both*
+  intensity models; `UserProfile.hrForIntensity` / `intensityForHr` are the only conversions
+  the rest of the app uses, so a percentage can never be read in the wrong scale.
+- **How fast the expected heart rate ramps** — `IwtProtocol.transitionSec`, or Settings →
+  During a walk.
+- **Cool-down tracking** — `CoolDownSettings`: how long to keep counting, which zone counts
+  as settled, and for how long.
 - **Protocol defaults** — `core/IntervalPlan.kt` (`IwtProtocol`), or just use the Settings screen.
 - **Coaching copy** — `workout/VoiceCoach.kt`, all spoken text in the `CoachScript` object.
 - **Duplicate detection** — `music/TrackDeduper.kt`: identity is file name plus
@@ -214,6 +228,11 @@ Everything below is one edit away:
 - **Reminder wording** — `game/ReminderCopy.kt`.
 - **Session circles** — `core/SessionDots.kt` (`MAX` caps how many fit a row).
 - **Tempo analyser** — `music/TempoEstimator.kt` (frame/hop size, BPM range, fold range).
+- **Loudness levelling** — `core/Loudness.kt` for the measurement, `LoudnessNormaliser` for the
+  gain rule; target and on/off live on the Music tab.
+- **Trainer protocol** — `trainer/FtmsProtocol.kt` is pure byte-twiddling with unit tests, so the
+  frame layouts can be checked without a bike in the room; `trainer/TrainerControl.kt` is the GATT
+  client. Easy/hard watts, the seeking step and its limits are in Settings → Indoor trainer.
 
 ---
 

@@ -23,6 +23,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- LoudnessEnhancer, which is how the quiet half of a playlist gets lifted
+         instead of the loud half being dragged down. Normal permission. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- Neither is required: the app runs with a simulated heart rate, and
          without GPS it simply omits distance. -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />

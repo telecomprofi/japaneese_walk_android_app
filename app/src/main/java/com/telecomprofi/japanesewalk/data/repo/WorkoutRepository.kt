@@ -46,6 +46,7 @@ class WorkoutRepository(
                 plannedSets = result.plannedSets,
                 completed = result.completed,
                 protocolLabel = result.protocolLabel,
+                mode = result.mode.ordinal,
             )
         )
         if (result.samples.isNotEmpty()) {

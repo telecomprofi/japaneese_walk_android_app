@@ -35,6 +35,10 @@ interface SessionDao {
     @Query("SELECT * FROM sessions ORDER BY startedAt DESC LIMIT :limit")
     fun recent(limit: Int = 60): Flow<List<SessionEntity>>
 
+    /** The session just finished, for the card at the top of the Summary tab. */
+    @Query("SELECT * FROM sessions ORDER BY startedAt DESC LIMIT 1")
+    fun latest(): Flow<SessionEntity?>
+
     @Query("SELECT * FROM sessions WHERE startedAt >= :from AND startedAt < :to ORDER BY startedAt ASC")
     fun between(from: Long, to: Long): Flow<List<SessionEntity>>
 
@@ -68,6 +72,13 @@ interface SessionDao {
         """
     )
     suspend fun statsBetweenOnce(from: Long, to: Long): PeriodStats
+
+    /** Modes of the week's completed sessions, oldest first, for the circles. */
+    @Query(
+        "SELECT mode FROM sessions WHERE startedAt >= :from AND startedAt < :to " +
+            "AND completed = 1 ORDER BY startedAt ASC"
+    )
+    suspend fun completedModesBetween(from: Long, to: Long): List<Int>
 
     @Query("SELECT COUNT(*) FROM sessions WHERE startedAt >= :from AND startedAt < :to AND completed = 1")
     suspend fun completedBetween(from: Long, to: Long): Int
@@ -142,6 +153,17 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE bpm <= 0 AND analyzedAt = 0 AND missing = 0 ORDER BY playlistOrder ASC")
     suspend fun unanalysed(): List<TrackEntity>
 
+    /**
+     * Anything still missing a measurement of either kind. Tracks queued before
+     * loudness existed have a tempo and a stamp but no loudness, and they still
+     * need one pass — the decode produces both figures at once.
+     */
+    @Query(
+        "SELECT * FROM tracks WHERE missing = 0 AND " +
+            "((bpm <= 0 AND analyzedAt = 0) OR loudnessLufs = 0) ORDER BY playlistOrder ASC"
+    )
+    suspend fun pendingAnalysis(): List<TrackEntity>
+
     @Query("SELECT COUNT(*) FROM tracks WHERE missing = 0")
     fun count(): Flow<Int>
 
@@ -150,6 +172,31 @@ interface TrackDao {
 
     @Query("UPDATE tracks SET bpm = :bpm, bpmConfidence = :conf, analyzedAt = :at WHERE uri = :uri")
     suspend fun setBpm(uri: String, bpm: Double, conf: Double, at: Long)
+
+    @Query(
+        "UPDATE tracks SET bpm = :bpm, bpmConfidence = :conf, loudnessLufs = :lufs, " +
+            "bpmSource = :source, analyzedAt = :at WHERE uri = :uri"
+    )
+    suspend fun setAnalysis(
+        uri: String,
+        bpm: Double,
+        conf: Double,
+        lufs: Double,
+        at: Long,
+        source: Int = BpmSource.MEASURED,
+    )
+
+    /** A tempo typed in by hand, which outranks anything measured or tagged. */
+    @Query(
+        "UPDATE tracks SET bpm = :bpm, bpmConfidence = 1.0, bpmSource = :source WHERE uri = :uri"
+    )
+    suspend fun setManualBpm(uri: String, bpm: Double, source: Int = BpmSource.MANUAL)
+
+    @Query("UPDATE tracks SET bpm = 0, bpmConfidence = 0, loudnessLufs = 0, bpmSource = 0, analyzedAt = 0")
+    suspend fun clearAnalysis()
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE loudnessLufs < -1 AND missing = 0")
+    fun levelledCount(): Flow<Int>
 
     @Query("UPDATE tracks SET missing = :missing WHERE uri = :uri")
     suspend fun setMissing(uri: String, missing: Boolean)

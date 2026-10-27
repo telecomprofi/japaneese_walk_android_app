@@ -11,8 +11,12 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.telecomprofi.japanesewalk.core.DataMetric
+import com.telecomprofi.japanesewalk.core.IntensityModel
 import com.telecomprofi.japanesewalk.core.IwtProtocol
+import com.telecomprofi.japanesewalk.core.MaxHrFormula
+import com.telecomprofi.japanesewalk.core.TrainerControlMode
 import com.telecomprofi.japanesewalk.core.UserProfile
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -30,6 +34,8 @@ class AppPrefs(private val context: Context) {
         val useMeasuredMaxHr = booleanPreferencesKey("use_measured_max_hr")
         val weightKg = doublePreferencesKey("weight_kg")
         val isMale = booleanPreferencesKey("is_male")
+        val intensityModel = stringPreferencesKey("intensity_model")
+        val maxHrFormula = stringPreferencesKey("max_hr_formula")
 
         val sets = intPreferencesKey("sets")
         val slowSec = intPreferencesKey("slow_sec")
@@ -42,6 +48,10 @@ class AppPrefs(private val context: Context) {
         val slowCadence = intPreferencesKey("slow_cadence")
         val fastCadence = intPreferencesKey("fast_cadence")
         val startWithSlow = booleanPreferencesKey("start_with_slow")
+        val slowMaxPct = doublePreferencesKey("slow_max_pct")
+        val fastMaxPct = doublePreferencesKey("fast_max_pct")
+        val bandWidthMaxPct = doublePreferencesKey("band_width_max_pct")
+        val transitionSec = intPreferencesKey("transition_sec")
 
         val musicTree = stringPreferencesKey("music_tree_uri")
         val musicEnabled = booleanPreferencesKey("music_enabled")
@@ -51,6 +61,9 @@ class AppPrefs(private val context: Context) {
         val octaveMatch = booleanPreferencesKey("octave_match")
         val volume = intPreferencesKey("volume_pct")
         val duck = intPreferencesKey("duck_pct")
+        val normaliseLoudness = booleanPreferencesKey("normalise_loudness")
+        val maxCutDb = intPreferencesKey("level_max_cut_db")
+        val maxBoostDb = intPreferencesKey("level_max_boost_db")
 
         val hrmAddress = stringPreferencesKey("hrm_address")
         val hrmName = stringPreferencesKey("hrm_name")
@@ -70,7 +83,34 @@ class AppPrefs(private val context: Context) {
         val reminderHour = intPreferencesKey("reminder_hour")
         val reminderMinute = intPreferencesKey("reminder_minute")
         val weeklyTarget = intPreferencesKey("weekly_target_min")
+        val weeklySummary = booleanPreferencesKey("weekly_summary_on")
+        val summaryHour = intPreferencesKey("weekly_summary_hour")
         val dataMetrics = stringPreferencesKey("data_metrics")
+
+        val coolDownTrack = booleanPreferencesKey("cooldown_track")
+        val coolDownMax = intPreferencesKey("cooldown_max_sec")
+        val coolDownZone = intPreferencesKey("cooldown_settled_zone")
+        val coolExtend = booleanPreferencesKey("cooldown_extend_active")
+        val coolHrFloor = intPreferencesKey("cooldown_active_hr")
+        val coolMaxExtra = intPreferencesKey("cooldown_max_extra_sec")
+        val coolDownSettled = intPreferencesKey("cooldown_settled_sec")
+        val keepScreenOn = booleanPreferencesKey("keep_screen_on")
+
+        val workoutMode = stringPreferencesKey("workout_mode")
+        val trainerAddress = stringPreferencesKey("trainer_address")
+        val trainerName = stringPreferencesKey("trainer_name")
+        val trainerControlMode = stringPreferencesKey("trainer_control_mode")
+        val easyWatts = intPreferencesKey("easy_watts")
+        val hardWatts = intPreferencesKey("hard_watts")
+        val easyResistance = intPreferencesKey("easy_resistance")
+        val hardResistance = intPreferencesKey("hard_resistance")
+        val easyRpm = intPreferencesKey("easy_rpm")
+        val hardRpm = intPreferencesKey("hard_rpm")
+        val autoAdjust = booleanPreferencesKey("trainer_auto_adjust")
+        val adjustStep = intPreferencesKey("trainer_adjust_step")
+        val adjustEvery = intPreferencesKey("trainer_adjust_every")
+        val minWatts = intPreferencesKey("trainer_min_watts")
+        val maxWatts = intPreferencesKey("trainer_max_watts")
 
         val onboarded = booleanPreferencesKey("onboarded")
         val indoorMode = booleanPreferencesKey("indoor_mode")
@@ -88,6 +128,12 @@ class AppPrefs(private val context: Context) {
                 useMeasuredMaxHr = this[K.useMeasuredMaxHr] ?: d.profile.useMeasuredMaxHr,
                 weightKg = this[K.weightKg] ?: d.profile.weightKg,
                 isMale = this[K.isMale] ?: d.profile.isMale,
+                intensityModel = this[K.intensityModel]?.let { name ->
+                    IntensityModel.entries.firstOrNull { it.name == name }
+                } ?: d.profile.intensityModel,
+                maxHrFormula = this[K.maxHrFormula]?.let { name ->
+                    MaxHrFormula.entries.firstOrNull { it.name == name }
+                } ?: d.profile.maxHrFormula,
             ),
             protocol = IwtProtocol(
                 sets = this[K.sets] ?: d.protocol.sets,
@@ -101,6 +147,10 @@ class AppPrefs(private val context: Context) {
                 slowCadenceSpm = this[K.slowCadence] ?: d.protocol.slowCadenceSpm,
                 fastCadenceSpm = this[K.fastCadence] ?: d.protocol.fastCadenceSpm,
                 startWithSlow = this[K.startWithSlow] ?: d.protocol.startWithSlow,
+                slowMaxPct = this[K.slowMaxPct] ?: d.protocol.slowMaxPct,
+                fastMaxPct = this[K.fastMaxPct] ?: d.protocol.fastMaxPct,
+                bandWidthMaxPct = this[K.bandWidthMaxPct] ?: d.protocol.bandWidthMaxPct,
+                transitionSec = this[K.transitionSec] ?: d.protocol.transitionSec,
             ),
             music = MusicSettings(
                 musicTreeUri = this[K.musicTree],
@@ -111,6 +161,9 @@ class AppPrefs(private val context: Context) {
                 allowOctaveMatch = this[K.octaveMatch] ?: d.music.allowOctaveMatch,
                 volumePercent = this[K.volume] ?: d.music.volumePercent,
                 duckPercent = this[K.duck] ?: d.music.duckPercent,
+                normaliseLoudness = this[K.normaliseLoudness] ?: d.music.normaliseLoudness,
+                maxCutDb = this[K.maxCutDb] ?: d.music.maxCutDb,
+                maxBoostDb = this[K.maxBoostDb] ?: d.music.maxBoostDb,
             ),
             hrm = HrmSettings(
                 deviceAddress = this[K.hrmAddress],
@@ -128,14 +181,49 @@ class AppPrefs(private val context: Context) {
                 driftGraceSec = this[K.driftGrace] ?: d.coach.driftGraceSec,
                 boutSettleSec = this[K.boutSettle] ?: d.coach.boutSettleSec,
             ),
+            coolDown = CoolDownSettings(
+                trackAfterFinish = this[K.coolDownTrack] ?: d.coolDown.trackAfterFinish,
+                maxSec = this[K.coolDownMax] ?: d.coolDown.maxSec,
+                settledZoneIdx = this[K.coolDownZone] ?: d.coolDown.settledZoneIdx,
+                settledSec = this[K.coolDownSettled] ?: d.coolDown.settledSec,
+                extendWhileActive = this[K.coolExtend] ?: d.coolDown.extendWhileActive,
+                activeHrFloor = this[K.coolHrFloor] ?: d.coolDown.activeHrFloor,
+                maxExtraSec = this[K.coolMaxExtra] ?: d.coolDown.maxExtraSec,
+            ),
+            mode = this[K.workoutMode]?.let { name ->
+                WorkoutMode.entries.firstOrNull { it.name == name }
+            } ?: d.mode,
+            cycle = CycleSettings(
+                deviceAddress = this[K.trainerAddress],
+                deviceName = this[K.trainerName],
+                controlMode = this[K.trainerControlMode]?.let { name ->
+                    TrainerControlMode.entries.firstOrNull { it.name == name }
+                } ?: d.cycle.controlMode,
+                easyWatts = this[K.easyWatts] ?: d.cycle.easyWatts,
+                hardWatts = this[K.hardWatts] ?: d.cycle.hardWatts,
+                easyResistance = this[K.easyResistance] ?: d.cycle.easyResistance,
+                hardResistance = this[K.hardResistance] ?: d.cycle.hardResistance,
+                easyCadenceRpm = this[K.easyRpm] ?: d.cycle.easyCadenceRpm,
+                hardCadenceRpm = this[K.hardRpm] ?: d.cycle.hardCadenceRpm,
+                autoAdjust = this[K.autoAdjust] ?: d.cycle.autoAdjust,
+                adjustStepWatts = this[K.adjustStep] ?: d.cycle.adjustStepWatts,
+                adjustEverySec = this[K.adjustEvery] ?: d.cycle.adjustEverySec,
+                minWatts = this[K.minWatts] ?: d.cycle.minWatts,
+                maxWatts = this[K.maxWatts] ?: d.cycle.maxWatts,
+            ),
+            display = DisplaySettings(
+                keepScreenOn = this[K.keepScreenOn] ?: d.display.keepScreenOn,
+            ),
             reminders = ReminderSettings(
                 enabled = this[K.remindersOn] ?: d.reminders.enabled,
                 hourOfDay = this[K.reminderHour] ?: d.reminders.hourOfDay,
                 minuteOfHour = this[K.reminderMinute] ?: d.reminders.minuteOfHour,
                 weeklyTargetMinutes = this[K.weeklyTarget] ?: d.reminders.weeklyTargetMinutes,
+                weeklySummary = this[K.weeklySummary] ?: d.reminders.weeklySummary,
+                summaryHourOfDay = this[K.summaryHour] ?: d.reminders.summaryHourOfDay,
             ),
             data = DataSettings(
-                metrics = this[K.dataMetrics]?.let { DataMetric.parse(it) } ?: DataMetric.DEFAULT,
+                metrics = this[K.dataMetrics]?.let { DataMetric.parse(it) } ?: DataMetric.WALK_DEFAULT,
             ),
             indoorMode = this[K.indoorMode] ?: false,
             onboarded = this[K.onboarded] ?: false,
@@ -149,6 +237,8 @@ class AppPrefs(private val context: Context) {
         it[K.useMeasuredMaxHr] = profile.useMeasuredMaxHr
         it[K.weightKg] = profile.weightKg
         it[K.isMale] = profile.isMale
+        it[K.intensityModel] = profile.intensityModel.name
+        it[K.maxHrFormula] = profile.maxHrFormula.name
     }
 
     suspend fun updateProtocol(protocol: IwtProtocol) = context.dataStore.edit {
@@ -163,6 +253,10 @@ class AppPrefs(private val context: Context) {
         it[K.slowCadence] = protocol.slowCadenceSpm
         it[K.fastCadence] = protocol.fastCadenceSpm
         it[K.startWithSlow] = protocol.startWithSlow
+        it[K.slowMaxPct] = protocol.slowMaxPct
+        it[K.fastMaxPct] = protocol.fastMaxPct
+        it[K.bandWidthMaxPct] = protocol.bandWidthMaxPct
+        it[K.transitionSec] = protocol.transitionSec
     }
 
     suspend fun updateMusic(music: MusicSettings) = context.dataStore.edit {
@@ -174,6 +268,9 @@ class AppPrefs(private val context: Context) {
         it[K.octaveMatch] = music.allowOctaveMatch
         it[K.volume] = music.volumePercent
         it[K.duck] = music.duckPercent
+        it[K.normaliseLoudness] = music.normaliseLoudness
+        it[K.maxCutDb] = music.maxCutDb
+        it[K.maxBoostDb] = music.maxBoostDb
     }
 
     suspend fun updateHrm(hrm: HrmSettings) = context.dataStore.edit {
@@ -194,11 +291,48 @@ class AppPrefs(private val context: Context) {
         it[K.boutSettle] = coach.boutSettleSec
     }
 
+    suspend fun updateCoolDown(c: CoolDownSettings) = context.dataStore.edit {
+        it[K.coolDownTrack] = c.trackAfterFinish
+        it[K.coolDownMax] = c.maxSec
+        it[K.coolDownZone] = c.settledZoneIdx
+        it[K.coolDownSettled] = c.settledSec
+        it[K.coolExtend] = c.extendWhileActive
+        it[K.coolHrFloor] = c.activeHrFloor
+        it[K.coolMaxExtra] = c.maxExtraSec
+    }
+
+    suspend fun setMode(mode: WorkoutMode) = context.dataStore.edit {
+        it[K.workoutMode] = mode.name
+    }
+
+    suspend fun updateCycle(c: CycleSettings) = context.dataStore.edit {
+        c.deviceAddress?.let { a -> it[K.trainerAddress] = a } ?: it.remove(K.trainerAddress)
+        c.deviceName?.let { n -> it[K.trainerName] = n } ?: it.remove(K.trainerName)
+        it[K.trainerControlMode] = c.controlMode.name
+        it[K.easyWatts] = c.easyWatts
+        it[K.hardWatts] = c.hardWatts
+        it[K.easyResistance] = c.easyResistance
+        it[K.hardResistance] = c.hardResistance
+        it[K.easyRpm] = c.easyCadenceRpm
+        it[K.hardRpm] = c.hardCadenceRpm
+        it[K.autoAdjust] = c.autoAdjust
+        it[K.adjustStep] = c.adjustStepWatts
+        it[K.adjustEvery] = c.adjustEverySec
+        it[K.minWatts] = c.minWatts
+        it[K.maxWatts] = c.maxWatts
+    }
+
+    suspend fun updateDisplay(display: DisplaySettings) = context.dataStore.edit {
+        it[K.keepScreenOn] = display.keepScreenOn
+    }
+
     suspend fun updateReminders(r: ReminderSettings) = context.dataStore.edit {
         it[K.remindersOn] = r.enabled
         it[K.reminderHour] = r.hourOfDay
         it[K.reminderMinute] = r.minuteOfHour
         it[K.weeklyTarget] = r.weeklyTargetMinutes
+        it[K.weeklySummary] = r.weeklySummary
+        it[K.summaryHour] = r.summaryHourOfDay
     }
 
     suspend fun updateData(data: DataSettings) = context.dataStore.edit {

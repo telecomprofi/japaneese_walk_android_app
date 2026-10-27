@@ -1,5 +1,6 @@
 package com.telecomprofi.japanesewalk
 
+import com.telecomprofi.japanesewalk.core.IntensityModel
 import com.telecomprofi.japanesewalk.core.IntervalPlan
 import com.telecomprofi.japanesewalk.core.IwtProtocol
 import com.telecomprofi.japanesewalk.core.Phase
@@ -74,8 +75,8 @@ class IntervalPlanTest {
     @Test
     fun `fast and slow bands come from the protocol`() {
         val profile = UserProfile(ageYears = 40, restingHr = 60, weightKg = 80.0)
-        val fast = plan.protocol.targetBand(Phase.FAST)
-        val slow = plan.protocol.targetBand(Phase.SLOW)
+        val fast = plan.protocol.targetBand(Phase.FAST, IntensityModel.HR_RESERVE)
+        val slow = plan.protocol.targetBand(Phase.SLOW, IntensityModel.HR_RESERVE)
         // Defaults: 70% top with a 20-point band, so 50-70% HRR = 120-144 bpm.
         assertEquals(120, fast.lowBpm(profile))
         assertEquals(144, fast.highBpm(profile))
@@ -88,7 +89,7 @@ class IntervalPlanTest {
     @Test
     fun `a narrower band width tightens the fast range`() {
         val profile = UserProfile(ageYears = 40, restingHr = 60)
-        val tight = IwtProtocol(bandWidthPct = 0.08).targetBand(Phase.FAST)
+        val tight = IwtProtocol(bandWidthPct = 0.08).targetBand(Phase.FAST, IntensityModel.HR_RESERVE)
         assertEquals(134, tight.lowBpm(profile))
         assertEquals(144, tight.highBpm(profile))
     }
@@ -97,7 +98,7 @@ class IntervalPlanTest {
     fun `accumulator tracks zones adherence and calories`() {
         val profile = UserProfile(ageYears = 40, restingHr = 60, weightKg = 80.0)
         val acc = WorkoutAccumulator(profile)
-        val band = plan.protocol.targetBand(Phase.FAST)
+        val band = plan.protocol.targetBand(Phase.FAST, IntensityModel.HR_RESERVE)
         val segment = plan.segmentAt(200)
         repeat(180) { acc.tick(1, 144, segment, band) }
 
@@ -149,7 +150,7 @@ class IntervalPlanTest {
     @Test
     fun `skipped time is not credited as work`() {
         val acc = WorkoutAccumulator(UserProfile())
-        acc.tick(1, 130, plan.segmentAt(200), plan.protocol.targetBand(Phase.FAST))
+        acc.tick(1, 130, plan.segmentAt(200), plan.protocol.targetBand(Phase.FAST, IntensityModel.HR_RESERVE))
         val kcalBefore = acc.kcal
         acc.skipAhead(120)
         assertEquals(121, acc.elapsedSec)

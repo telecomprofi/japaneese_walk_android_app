@@ -8,6 +8,7 @@ import com.telecomprofi.japanesewalk.data.repo.StatsRepository
 import com.telecomprofi.japanesewalk.data.repo.WorkoutRepository
 import com.telecomprofi.japanesewalk.game.Notifications
 import com.telecomprofi.japanesewalk.game.ReminderScheduler
+import com.telecomprofi.japanesewalk.game.WeeklySummaryScheduler
 import com.telecomprofi.japanesewalk.music.MusicLibrary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,7 @@ class JapaneseWalkApp : Application() {
         CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             val settings = Graph.container.prefs.settings.first()
             ReminderScheduler.apply(this@JapaneseWalkApp, settings.reminders)
+            WeeklySummaryScheduler.apply(this@JapaneseWalkApp, settings.reminders)
         }
     }
 }

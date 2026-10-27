@@ -21,9 +21,17 @@ class DataViewModel : ViewModel() {
 
     val workout = WorkoutHub.state
 
+    /** Shared with the Walk screen, so the Mute button means the same on both. */
+    val musicMuted = WorkoutHub.musicMuted
+
     val profile: StateFlow<UserProfile> = container.prefs.settings
         .map { it.profile }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UserProfile())
+
+    /** Only used when nothing is running; live state wins during a session. */
+    val plannedSets: StateFlow<Int> = container.prefs.settings
+        .map { it.protocol.sets }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 5)
 
     val metrics: StateFlow<List<DataMetric>> = container.prefs.settings
         .map { it.data.metrics }

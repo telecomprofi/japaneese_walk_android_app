@@ -1,9 +1,10 @@
 package com.telecomprofi.japanesewalk
 
-import com.telecomprofi.japanesewalk.core.SessionDot
 import com.telecomprofi.japanesewalk.core.ReminderTime
+import com.telecomprofi.japanesewalk.core.SessionDot
 import com.telecomprofi.japanesewalk.core.SessionDots
 import com.telecomprofi.japanesewalk.core.TimeMath
+import com.telecomprofi.japanesewalk.core.WorkoutMode
 import com.telecomprofi.japanesewalk.game.ReminderCopy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -120,5 +121,54 @@ class SessionAndReminderTest {
         assertEquals("3:05", TimeMath.mmss(185))
         assertEquals("01:02:05", TimeMath.hhmmss(3725))
         assertEquals("2h 30m", TimeMath.humanMinutes(9000))
+    }
+
+    @Test
+    fun `completed circles carry the kind of session that filled them`() {
+        val circles = SessionDots.withModes(
+            completedModes = listOf(WorkoutMode.WALK, WorkoutMode.CYCLE, WorkoutMode.WALK),
+            partial = 1,
+            targetMinutes = 150,
+            sessionMinutes = 30,
+        )
+        assertEquals(5, circles.size)
+        assertEquals(
+            listOf(
+                SessionDot.DONE, SessionDot.DONE, SessionDot.DONE,
+                SessionDot.PARTIAL, SessionDot.PLANNED,
+            ),
+            circles.map { it.state },
+        )
+        // In the order the sessions happened, so the row reads like the week did.
+        assertEquals(
+            listOf(WorkoutMode.WALK, WorkoutMode.CYCLE, WorkoutMode.WALK),
+            circles.filter { it.state == SessionDot.DONE }.map { it.mode },
+        )
+        // Nothing is claimed about a circle that has not been earned yet.
+        assertTrue(circles.filter { it.state != SessionDot.DONE }.all { it.mode == null })
+    }
+
+    @Test
+    fun `a week of walks looks exactly as it did before rides existed`() {
+        val circles = SessionDots.withModes(List(3) { WorkoutMode.WALK }, 0, 150, 30)
+        assertEquals(SessionDots.of(3, 0, 150, 30), circles.map { it.state })
+        assertTrue(circles.take(3).all { it.mode == WorkoutMode.WALK })
+    }
+
+    @Test
+    fun `past the cap the circles shown are still labelled`() {
+        val modes = List(9) { if (it % 2 == 0) WorkoutMode.WALK else WorkoutMode.CYCLE }
+        val circles = SessionDots.withModes(modes, 0, 150, 30)
+        assertEquals(SessionDots.MAX, circles.size)
+        assertTrue(circles.all { it.state == SessionDot.DONE })
+        assertTrue(circles.none { it.mode == null })
+        assertEquals(modes.take(SessionDots.MAX), circles.map { it.mode })
+    }
+
+    @Test
+    fun `no completed sessions means no labels to apply`() {
+        val circles = SessionDots.withModes(emptyList(), 0, 150, 30)
+        assertEquals(5, circles.size)
+        assertTrue(circles.all { it.state == SessionDot.PLANNED && it.mode == null })
     }
 }

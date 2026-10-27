@@ -35,6 +35,26 @@ object Calories {
         Phase.COOLDOWN -> 2.8
     }
 
+    /**
+     * Gross energy cost of pedalling, from mechanical work.
+     *
+     * A trainer reports the watts actually delivered to the flywheel. Human
+     * gross efficiency on a bike is close to 22.5%, so the body spends roughly
+     * 4.4 times the mechanical energy it puts out — which, once the kJ-to-kcal
+     * conversion is applied, lands almost exactly on "kcal ≈ kJ of work". That
+     * coincidence is why power meters quote the two interchangeably.
+     *
+     * More accurate than the heart-rate model on a bike, because it measures the
+     * work rather than inferring it from the response to work.
+     */
+    const val CYCLING_EFFICIENCY = 0.225
+
+    fun kcalFromPower(watts: Int, seconds: Double): Double {
+        if (watts <= 0 || seconds <= 0) return 0.0
+        val kJ = watts * seconds / 1000.0
+        return kJ / KJ_PER_KCAL / CYCLING_EFFICIENCY
+    }
+
     fun kcalForInterval(hr: Int?, phase: Phase, seconds: Double, p: UserProfile): Double {
         val perMin = if (hr != null && hr > 30) {
             kcalPerMinuteFromHr(hr, p)

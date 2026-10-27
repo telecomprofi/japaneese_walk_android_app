@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -22,13 +23,19 @@ import com.telecomprofi.japanesewalk.core.ZoneBand
  * a half circle resting on its base. Same fill rule, same colour ramp, same zone
  * boundaries — only the geometry differs, so the two screens can never tell you
  * different things about the same heart rate.
+ *
+ * Its height is capped rather than derived from the width. A half circle as wide
+ * as the phone is over 200dp tall, which pushed the track name and the music
+ * buttons below the fold — and something you reach for mid-ride has to be on
+ * screen without scrolling. [maxArcHeight] is what keeps it there.
  */
 @Composable
 fun ZoneArc(
     bands: List<ZoneBand>,
     fraction: Float,
     modifier: Modifier = Modifier,
-    stroke: Dp = 22.dp,
+    stroke: Dp = 20.dp,
+    maxArcHeight: Dp = 132.dp,
     content: @Composable () -> Unit = {},
 ) {
     val animated by animateFloatAsState(
@@ -38,9 +45,10 @@ fun ZoneArc(
     )
 
     BoxWithConstraints(modifier, contentAlignment = Alignment.BottomCenter) {
-        val side = maxWidth
+        // Whichever is smaller: as wide as the screen, or as tall as allowed.
+        val diameter = minOf(maxWidth, (maxArcHeight - stroke) * 2)
         Box(
-            Modifier.fillMaxWidth().height(side / 2 + stroke),
+            Modifier.width(diameter).height(diameter / 2 + stroke),
             contentAlignment = Alignment.BottomCenter,
         ) {
             Canvas(Modifier.fillMaxSize()) {

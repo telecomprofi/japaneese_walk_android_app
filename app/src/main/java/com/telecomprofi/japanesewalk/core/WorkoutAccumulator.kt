@@ -14,6 +14,12 @@ class WorkoutAccumulator(private val profile: UserProfile) {
     var samples: Int = 0; private set
     private var hrSum: Long = 0
 
+    /** Mechanical work done, joules. Only ever non-zero with a power source. */
+    var workJoules: Double = 0.0; private set
+    var maxPowerW: Int = 0; private set
+    private var powerSum: Long = 0
+    private var powerSamples: Int = 0
+
     /** Seconds spent in each zone, indexed by [HrZone.idx] - 1. */
     val secondsInZone = IntArray(HrZone.entries.size)
 
@@ -27,17 +33,31 @@ class WorkoutAccumulator(private val profile: UserProfile) {
 
     val avgHr: Int get() = if (samples == 0) 0 else (hrSum / samples).toInt()
 
+    val avgPowerW: Int get() = if (powerSamples == 0) 0 else (powerSum / powerSamples).toInt()
+
+    val workKj: Double get() = workJoules / 1000.0
+
     /**
      * Advance the workout by [dtSec] seconds.
      *
      * @param hr latest heart rate, or null when the strap has no reading.
      */
-    fun tick(dtSec: Int, hr: Int?, segment: Segment?, band: TargetBand?) {
+    fun tick(dtSec: Int, hr: Int?, segment: Segment?, band: TargetBand?, powerW: Int? = null) {
         if (dtSec <= 0) return
         elapsedSec += dtSec
 
         val phase = segment?.phase ?: Phase.SLOW
-        kcal += Calories.kcalForInterval(hr, phase, dtSec.toDouble(), profile)
+        // Measured work beats an inferred estimate: with a trainer reporting
+        // watts the energy cost is arithmetic, not a regression on heart rate.
+        if (powerW != null && powerW > 0) {
+            workJoules += powerW.toDouble() * dtSec
+            powerSum += powerW.toLong() * dtSec
+            powerSamples += dtSec
+            if (powerW > maxPowerW) maxPowerW = powerW
+            kcal += Calories.kcalFromPower(powerW, dtSec.toDouble())
+        } else {
+            kcal += Calories.kcalForInterval(hr, phase, dtSec.toDouble(), profile)
+        }
 
         if (hr != null && hr > 30) {
             samples += dtSec

@@ -30,6 +30,7 @@ object JwColors {
     val Gold = Color(0xFFFFD60A)
     /** Fill for a completed session circle. */
     val SlowSoft = Color(0xFF7BE39A)
+    val FastSoft = Color(0xFFFFC46B)
     /** Outline for a session not done yet. */
     val Outline = Color(0xFF48484A)
 }

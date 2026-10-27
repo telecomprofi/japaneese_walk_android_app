@@ -25,6 +25,30 @@ object ReminderTime {
         return Duration.between(now, target).toMinutes().coerceAtLeast(1)
     }
 
+    /**
+     * Minutes until the next [dayOfWeek] at [hourOfDay]:[minuteOfHour]. Used for
+     * the Sunday summary; today counts only if the time has not passed yet.
+     */
+    fun weeklyDelayMinutes(
+        dayOfWeek: java.time.DayOfWeek,
+        hourOfDay: Int,
+        minuteOfHour: Int = 0,
+        now: LocalDateTime = LocalDateTime.now(),
+    ): Long {
+        val time = LocalTime.of(hourOfDay.coerceIn(0, 23), minuteOfHour.coerceIn(0, 59))
+        var target = LocalDateTime.of(
+            now.toLocalDate().with(java.time.temporal.TemporalAdjusters.nextOrSame(dayOfWeek)),
+            time,
+        )
+        if (!target.isAfter(now)) {
+            target = LocalDateTime.of(
+                now.toLocalDate().with(java.time.temporal.TemporalAdjusters.next(dayOfWeek)),
+                time,
+            )
+        }
+        return Duration.between(now, target).toMinutes().coerceAtLeast(1)
+    }
+
     fun format(hourOfDay: Int, minuteOfHour: Int): String =
         "%02d:%02d".format(hourOfDay.coerceIn(0, 23), minuteOfHour.coerceIn(0, 59))
 }

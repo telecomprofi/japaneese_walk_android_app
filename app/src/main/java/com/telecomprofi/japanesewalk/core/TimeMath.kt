@@ -47,6 +47,18 @@ object TimeMath {
     fun startOfWeekMillisOffset(nowMillis: Long, weeksAgo: Int, zone: ZoneId = ZoneId.systemDefault()): Long =
         startOfWeekMillis(nowMillis, zone) - weeksAgo * 7L * 24 * 60 * 60 * 1000
 
+    /** "Mon", "Tue"… in the phone's own language. */
+    fun dayName(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        localDate(millis, zone).dayOfWeek.getDisplayName(
+            java.time.format.TextStyle.SHORT,
+            java.util.Locale.getDefault(),
+        )
+
+    /** "14:05" in the phone's own clock format-agnostic 24h form. */
+    fun timeOfDay(millis: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        java.time.Instant.ofEpochMilli(millis).atZone(zone).toLocalTime()
+            .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+
     fun mmss(totalSec: Int): String {
         val s = totalSec.coerceAtLeast(0)
         return "%d:%02d".format(s / 60, s % 60)

@@ -15,7 +15,7 @@ data class TempoResult(
     /** Raw un-folded winner, for debugging. */
     val rawBpm: Double = bpm,
 ) {
-    val isUsable: Boolean get() = bpm > 0 && confidence >= 0.15
+    val isUsable: Boolean get() = bpm > 0 && confidence >= 0.35
 }
 
 /**

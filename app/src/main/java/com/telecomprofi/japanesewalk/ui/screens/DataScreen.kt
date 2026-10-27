@@ -39,6 +39,8 @@ import com.telecomprofi.japanesewalk.core.DataMetric
 import com.telecomprofi.japanesewalk.core.HrZone
 import com.telecomprofi.japanesewalk.core.Pace
 import com.telecomprofi.japanesewalk.core.TimeMath
+import com.telecomprofi.japanesewalk.ui.components.MusicRow
+import com.telecomprofi.japanesewalk.ui.components.SetLine
 import com.telecomprofi.japanesewalk.ui.components.ZoneArc
 import com.telecomprofi.japanesewalk.ui.theme.JwColors
 import com.telecomprofi.japanesewalk.ui.theme.color
@@ -54,10 +56,21 @@ fun DataScreen(vm: DataViewModel = viewModel()) {
     val state by vm.workout.collectAsState()
     val profile by vm.profile.collectAsState()
     val metrics by vm.metrics.collectAsState()
-    val bands by vm.bands.collectAsState()
+    val idleBands by vm.bands.collectAsState()
+    val musicMuted by vm.musicMuted.collectAsState()
+    val plannedSets by vm.plannedSets.collectAsState()
     var editing by remember { mutableStateOf(false) }
 
-    val fraction = state.hr?.let { HrZone.gaugeFraction(it, profile).toFloat() } ?: 0f
+    // Both from the engine while it is running, so the fill and the coloured
+    // bands are always in the same scale — recomputing the fraction from the
+    // live profile here meant switching intensity model mid-walk painted one
+    // scale's needle over the other scale's bands.
+    val bands = if (state.isActive && state.zoneBands.isNotEmpty()) state.zoneBands else idleBands
+    val fraction = if (state.isActive) {
+        state.gaugeFraction
+    } else {
+        state.hr?.let { HrZone.gaugeFraction(it, profile).toFloat() } ?: 0f
+    }
     val zone = state.zone
 
     Column(
@@ -73,7 +86,17 @@ fun DataScreen(vm: DataViewModel = viewModel()) {
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
-            if (!state.gpsTracking) {
+            if (state.mode == com.telecomprofi.japanesewalk.core.WorkoutMode.CYCLE) {
+                Text(
+                    when {
+                        state.trainerControlling -> "trainer · ${state.trainerTarget} W"
+                        state.trainerConnected -> "trainer · no control"
+                        else -> "no trainer"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.trainerControlling) JwColors.Slow else JwColors.Gold,
+                )
+            } else if (!state.gpsTracking) {
                 Text(
                     "no GPS",
                     style = MaterialTheme.typography.labelSmall,
@@ -96,7 +119,7 @@ fun DataScreen(vm: DataViewModel = viewModel()) {
             ) {
                 Text(
                     state.hr?.toString() ?: "--",
-                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 62.sp),
+                    style = MaterialTheme.typography.displayLarge.copy(fontSize = 48.sp),
                     color = zone?.color() ?: JwColors.Muted,
                 )
                 Text(
@@ -107,7 +130,20 @@ fun DataScreen(vm: DataViewModel = viewModel()) {
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(6.dp))
+
+        SetLine(
+            phase = state.phase,
+            setNumber = state.setNumber,
+            totalSets = if (state.isActive) state.totalSets else plannedSets,
+            segmentElapsedSec = state.segmentElapsedSec,
+            segmentTotalSec = state.segmentTotalSec,
+            isCooling = state.isCooling,
+            coolDownSec = state.coolDownSec,
+            mode = state.mode,
+        )
+
+        Spacer(Modifier.height(12.dp))
 
         if (editing) {
             DataMetric.entries.forEach { metric ->
@@ -154,6 +190,23 @@ fun DataScreen(vm: DataViewModel = viewModel()) {
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
+
+            // The same music block as the Walk screen: mid-walk you should not
+            // have to swipe back to skip a track.
+            if (state.nowPlaying != null) {
+                Spacer(Modifier.height(4.dp))
+                MusicRow(
+                    nowPlaying = state.nowPlaying,
+                    muted = musicMuted,
+                    status = state.musicStatus,
+                    controlsEnabled = state.isActive,
+                    accent = if (state.phase == com.telecomprofi.japanesewalk.core.Phase.FAST) {
+                        JwColors.Fast
+                    } else {
+                        JwColors.Slow
+                    },
+                )
+            }
         }
     }
 }
@@ -163,7 +216,9 @@ private fun MetricCard(metric: DataMetric, state: WorkoutUiState, modifier: Modi
     val (value, accent) = metric.valueOf(state)
     Box(
         modifier
-            .aspectRatio(1f)
+            // Wider than tall: nine square tiles pushed the music row off the
+            // bottom of the screen, and the numbers do not need the height.
+            .aspectRatio(1.35f)
             .clip(RoundedCornerShape(14.dp))
             .background(JwColors.Surface),
         contentAlignment = Alignment.Center,
@@ -196,6 +251,9 @@ private fun DataMetric.valueOf(state: WorkoutUiState): Pair<String, androidx.com
     // Without a fix, a zero would read as "you have not moved" rather than
     // "nothing is being measured".
     if (needsGps && !state.gpsTracking) return "--" to JwColors.Muted
+    // Same reasoning for the trainer tiles: a zero would read as "you are not
+    // pedalling" rather than "nothing is being measured".
+    if (needsTrainer && !state.trainerConnected) return "--" to JwColors.Muted
     return when (this) {
         DataMetric.BPM -> (state.hr?.toString() ?: "--") to JwColors.OnSurface
         DataMetric.DURATION -> TimeMath.mmss(state.elapsedSec) to JwColors.OnSurface
@@ -208,5 +266,9 @@ private fun DataMetric.valueOf(state: WorkoutUiState): Pair<String, androidx.com
         DataMetric.CALORIES -> state.kcal.toString() to JwColors.Fast
         DataMetric.KCAL_PER_MIN ->
             "%.1f".format(Pace.kcalPerMinute(state.kcal, state.elapsedSec)) to JwColors.Fast
+        DataMetric.POWER -> (if (state.powerW > 0) state.powerW.toString() else "--") to JwColors.Gold
+        DataMetric.CADENCE -> (if (state.cadenceRpm > 0) state.cadenceRpm.toString() else "--") to JwColors.Accent
+        DataMetric.AVG_POWER -> (if (state.avgPowerW > 0) state.avgPowerW.toString() else "--") to JwColors.Gold
+        DataMetric.WORK -> (if (state.workKj > 0) "%.0f".format(state.workKj) else "--") to JwColors.Gold
     }
 }
